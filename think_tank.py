@@ -1027,6 +1027,7 @@ def main():
     # ── JSON collection ─────────────────────────────────────────────────
     json_rounds = []
     json_review = None
+    json_analysis = None
     json_synthesis = None
     pipeline_start = time.time()
 
@@ -1101,59 +1102,71 @@ def main():
                             conversations[key].append({"role": "user", "content": msg})
                     transcript.append(f"\n**Follow-up:** {follow_up}\n")
 
+    # ── Analysis (structured disagreement) ──────────────────────────────
+    # Gather final responses (last response from each model)
+    final_responses = {}
+    for key in active_models:
+        if conversations[key]:
+            for msg in reversed(conversations[key]):
+                if msg["role"] == "assistant":
+                    final_responses[key] = msg["content"]
+                    break
+
+    responding = [k for k in active_models if final_responses.get(k)]
+    analysis_text = None
+
+    if len(responding) >= 2:
+        analysis_text = run_analysis(
+            final_responses, active_models, question, context,
+            args.chairman, blind_map,
+        )
+        if analysis_text:
+            json_analysis = analysis_text
+            transcript.append(f"\n## Analysis (Structured Disagreement)\n{analysis_text}\n")
+        else:
+            transcript.append("\n## Analysis\n*Analysis failed — continuing without it.*\n")
+    else:
+        _print(f"\n{C['system']}  Skipping analysis — fewer than 2 models responded.{C['reset']}")
+
     # ── Review + Synthesis (unless --no-chairman) ────────────────────────
     chairman_text = None
     label_to_model = {}
-    if not args.no_chairman:
-        # Gather final responses (last response from each model)
-        final_responses = {}
+    if not args.no_chairman and len(responding) >= 2:
+        all_rankings, label_to_model, aggregate, review_texts = run_review(
+            final_responses, active_models, question, context, blind_map,
+        )
+
+        # Collect review data for JSON
+        json_review = {
+            "rankings": [
+                {"model": mk, "name": MODELS[mk]["name"], "avg_rank": avg, "votes": votes}
+                for mk, avg, votes in aggregate
+            ],
+            "label_map": {label: mk for label, mk in label_to_model.items()},
+        }
+
+        # Transcript: review section
+        transcript.append(f"\n## Review (Anonymized Peer Ranking)\n")
         for key in active_models:
-            if conversations[key]:
-                for msg in reversed(conversations[key]):
-                    if msg["role"] == "assistant":
-                        final_responses[key] = msg["content"]
-                        break
+            if review_texts.get(key):
+                name = get_display_name(key, blind_map)
+                transcript.append(f"### {name}'s Review\n{review_texts[key]}\n")
+        transcript.append("### Aggregate Rankings\n")
+        for rank, (mk, avg, votes) in enumerate(aggregate, 1):
+            name = get_display_name(mk, blind_map)
+            transcript.append(f"{rank}. {name} — avg rank {avg} ({votes} votes)\n")
 
-        responding = [k for k in active_models if final_responses.get(k)]
+        # Chairman synthesis
+        chairman_text = run_chairman(
+            final_responses, active_models, aggregate,
+            question, context, args.chairman, analysis_text,
+        )
 
-        if len(responding) >= 2:
-            all_rankings, label_to_model, aggregate, review_texts = run_review(
-                final_responses, active_models, question, context, blind_map,
-            )
-
-            # Collect review data for JSON
-            json_review = {
-                "rankings": [
-                    {"model": mk, "name": MODELS[mk]["name"], "avg_rank": avg, "votes": votes}
-                    for mk, avg, votes in aggregate
-                ],
-                "label_map": {label: mk for label, mk in label_to_model.items()},
-            }
-
-            # Transcript: review section
-            transcript.append(f"\n## Review (Anonymized Peer Ranking)\n")
-            for key in active_models:
-                if review_texts.get(key):
-                    name = get_display_name(key, blind_map)
-                    transcript.append(f"### {name}'s Review\n{review_texts[key]}\n")
-            transcript.append("### Aggregate Rankings\n")
-            for rank, (mk, avg, votes) in enumerate(aggregate, 1):
-                name = get_display_name(mk, blind_map)
-                transcript.append(f"{rank}. {name} — avg rank {avg} ({votes} votes)\n")
-
-            # Chairman synthesis
-            chairman_text = run_chairman(
-                final_responses, active_models, aggregate,
-                question, context, args.chairman,
-            )
-
-            if chairman_text:
-                json_synthesis = chairman_text
-                transcript.append(f"\n## Chairman Synthesis\n{chairman_text}\n")
-            else:
-                transcript.append("\n## Chairman Synthesis\n*Chairman failed — see aggregate rankings above.*\n")
+        if chairman_text:
+            json_synthesis = chairman_text
+            transcript.append(f"\n## Chairman Synthesis\n{chairman_text}\n")
         else:
-            _print(f"\n{C['system']}  Skipping review — fewer than 2 models responded.{C['reset']}")
+            transcript.append("\n## Chairman Synthesis\n*Chairman failed — see aggregate rankings above.*\n")
 
     # ── Blind reveal ────────────────────────────────────────────────────
     if args.blind:
@@ -1185,6 +1198,8 @@ def main():
             "models": [k for k in active_models if any(r["responses"].get(k) for r in json_rounds)],
             "rounds": json_rounds,
         }
+        if json_analysis:
+            json_output["analysis"] = json_analysis
         if not args.no_chairman and json_review:
             json_output["review"] = json_review
         if not args.no_chairman and json_synthesis:
