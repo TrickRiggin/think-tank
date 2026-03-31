@@ -315,8 +315,18 @@ def spinner_frames():
 
 # ── Core logic ───────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are one voice in a {model_count}-model think tank. The user has a question \
+SYSTEM_PROMPT_PROJECT = """You are one voice in a {model_count}-model think tank. The user has a question \
 about a software project. They've provided project context below.
+
+Rules:
+- Be direct and concise. No filler.
+- Disagree with other models when warranted — sycophancy is useless here.
+- If you spot a flaw in another model's reasoning, call it out specifically.
+- Propose concrete solutions, not vague suggestions.
+- If you don't have enough context, say what you'd need.
+- Keep responses focused — aim for substance, not length."""
+
+SYSTEM_PROMPT_GENERAL = """You are one voice in a {model_count}-model think tank. The user has a question.
 
 Rules:
 - Be direct and concise. No filler.
@@ -413,6 +423,12 @@ def main():
     parser.add_argument("--save", "-s", help="Save transcript to file")
     parser.add_argument("--no-context", action="store_true", help="Skip auto-detecting CLAUDE.md")
     parser.add_argument("--models", "-m", help="Comma-separated model keys (claude,gpt,gemini,grok)")
+    parser.add_argument("--chairman", "-c", default="claude",
+                        help="Model key for chairman synthesis (default: claude)")
+    parser.add_argument("--blind", "-b", action="store_true",
+                        help="Hide model identities until reveal at end")
+    parser.add_argument("--no-chairman", action="store_true",
+                        help="Skip review + synthesis stages")
 
     args = parser.parse_args()
 
@@ -436,6 +452,11 @@ def main():
             sys.exit(1)
     else:
         active_models = list(MODELS.keys())
+
+    # Validate chairman
+    if args.chairman not in MODELS:
+        print(f"{C['err']}Unknown chairman: {args.chairman}. Use: {', '.join(MODELS.keys())}{C['reset']}")
+        sys.exit(1)
 
     model_count = len(active_models)
 
@@ -471,9 +492,14 @@ def main():
         print(f"  {C['bold']}Rounds:{C['reset']} {args.rounds}")
     if args.interactive:
         print(f"  {C['bold']}Mode:{C['reset']} Interactive")
+    if not args.no_chairman:
+        print(f"  {C['bold']}Chairman:{C['reset']} {MODELS[args.chairman]['name']}")
+    if args.blind:
+        print(f"  {C['bold']}Mode:{C['reset']} Blind (identities hidden until reveal)")
 
     # Build initial messages
-    system_msg = SYSTEM_PROMPT.format(model_count=model_count)
+    system_template = SYSTEM_PROMPT_PROJECT if context else SYSTEM_PROMPT_GENERAL
+    system_msg = system_template.format(model_count=model_count)
     user_content = question
     if context:
         user_content = f"{context}\n\n---\n\n# Question\n\n{question}"
