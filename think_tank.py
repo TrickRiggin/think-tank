@@ -58,6 +58,15 @@ def load_env_files():
 
 load_env_files()
 
+# ── JSON mode (suppress terminal output, collect structured data) ───────────
+
+JSON_MODE = False
+
+def _print(*args, **kwargs):
+    """Print wrapper that respects JSON_MODE."""
+    if not JSON_MODE:
+        print(*args, **kwargs)
+
 # ── Terminal colors ──────────────────────────────────────────────────────────
 
 # Enable ANSI + UTF-8 on Windows
@@ -262,7 +271,7 @@ def build_context(args):
                 sections.append(f"# Project Memory (MEMORY.md)\n\n{text}")
                 token_report.append(f"MEMORY.md (~{estimate_tokens(text):,} tokens)")
         else:
-            print(f"  {C['dim']}(--deep: no memory directory found){C['reset']}")
+            _print(f"  {C['dim']}(--deep: no memory directory found){C['reset']}")
 
     # --files: specific files
     if args.files:
@@ -274,7 +283,7 @@ def build_context(args):
                 sections.append(f"# File: {filepath}\n\n```\n{text}\n```")
                 token_report.append(f"{filepath} (~{estimate_tokens(text):,} tokens)")
             else:
-                print(f"  {C['err']}Warning: {filepath} not found, skipping{C['reset']}")
+                _print(f"  {C['err']}Warning: {filepath} not found, skipping{C['reset']}")
 
     context = "\n\n---\n\n".join(sections) if sections else ""
     return context, token_report
@@ -288,9 +297,9 @@ def header(text):
     except OSError:
         width = 80
     bar = "━" * width
-    print(f"\n{C['bold']}{bar}{C['reset']}")
-    print(f"{C['bold']}  {text}{C['reset']}")
-    print(f"{C['bold']}{bar}{C['reset']}\n")
+    _print(f"\n{C['bold']}{bar}{C['reset']}")
+    _print(f"{C['bold']}  {text}{C['reset']}")
+    _print(f"{C['bold']}{bar}{C['reset']}\n")
 
 
 def model_header(model_key, elapsed=None, display_name=None):
@@ -298,13 +307,13 @@ def model_header(model_key, elapsed=None, display_name=None):
     color = C[model_key]
     name = display_name or info["name"]
     time_str = f" ({elapsed:.1f}s)" if elapsed else ""
-    print(f"\n{color}{C['bold']}▌ {name}{time_str}{C['reset']}")
-    print(f"{color}{'─' * 40}{C['reset']}")
+    _print(f"\n{color}{C['bold']}▌ {name}{time_str}{C['reset']}")
+    _print(f"{color}{'─' * 40}{C['reset']}")
 
 
 def show_response(model_key, text, elapsed=None, display_name=None):
     model_header(model_key, elapsed, display_name)
-    print(text)
+    _print(text)
 
 
 def spinner_frames():
@@ -407,18 +416,19 @@ Do not add any text after the ranking."""
 
 
 def run_round(conversations, active_models, round_num, blind_map=None):
-    """Run one round of parallel API calls. Returns {model_key: response_text}."""
+    """Run one round of parallel API calls. Returns {model_key: (response_text, elapsed)}."""
     results = {}
+    timings = {}
     start = time.time()
 
-    print(f"\n{C['dim']}  Waiting for models...{C['reset']}", end="", flush=True)
+    _print(f"\n{C['dim']}  Waiting for models...{C['reset']}", end="", flush=True)
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {}
         for key in active_models:
             api_key = os.environ.get(MODELS[key]["env_key"])
             if not api_key:
-                print(f"\n  {C['err']}{MODELS[key]['name']}: missing {MODELS[key]['env_key']}{C['reset']}")
+                _print(f"\n  {C['err']}{MODELS[key]['name']}: missing {MODELS[key]['env_key']}{C['reset']}")
                 continue
             futures[pool.submit(CALLERS[key], conversations[key], api_key)] = key
 
@@ -429,11 +439,12 @@ def run_round(conversations, active_models, round_num, blind_map=None):
             completed += 1
 
             # Clear "waiting" line
-            print(f"\r{' ' * 60}\r", end="", flush=True)
+            _print(f"\r{' ' * 60}\r", end="", flush=True)
 
             try:
                 text = future.result()
                 results[key] = text
+                timings[key] = elapsed
                 display_name = get_display_name(key, blind_map)
                 show_response(key, text, elapsed, display_name)
             except Exception as e:
@@ -444,19 +455,19 @@ def run_round(conversations, active_models, round_num, blind_map=None):
                         error_detail = e.response.json()
                     except Exception:
                         error_detail = e.response.text[:500]
-                print(f"\n  {C['err']}{MODELS[key]['name']} failed: {error_detail}{C['reset']}")
+                _print(f"\n  {C['err']}{MODELS[key]['name']} failed: {error_detail}{C['reset']}")
                 results[key] = None
 
             remaining = len(futures) - completed
             if remaining > 0:
                 waiting = [get_display_name(futures[f], blind_map) for f in futures if not f.done()]
-                print(f"\n{C['dim']}  Waiting for {', '.join(waiting)}...{C['reset']}", end="", flush=True)
+                _print(f"\n{C['dim']}  Waiting for {', '.join(waiting)}...{C['reset']}", end="", flush=True)
 
     total_time = time.time() - start
     total_tokens = sum(estimate_tokens(r) for r in results.values() if r)
-    print(f"\n\n{C['system']}  Round {round_num} complete · {total_time:.1f}s · ~{total_tokens:,} output tokens{C['reset']}")
+    _print(f"\n\n{C['system']}  Round {round_num} complete · {total_time:.1f}s · ~{total_tokens:,} output tokens{C['reset']}")
 
-    return results
+    return results, timings
 
 
 def build_deliberation_message(results, exclude_key):
@@ -568,7 +579,7 @@ def run_review(results, active_models, question, context, blind_map=None):
 
     header("Review (Anonymized Peer Ranking)")
     start = time.time()
-    print(f"\n{C['dim']}  Waiting for reviews...{C['reset']}", end="", flush=True)
+    _print(f"\n{C['dim']}  Waiting for reviews...{C['reset']}", end="", flush=True)
 
     review_texts = {}
     all_rankings = []
@@ -586,7 +597,7 @@ def run_review(results, active_models, question, context, blind_map=None):
             key = futures[future]
             elapsed = time.time() - start
             completed += 1
-            print(f"\r{' ' * 60}\r", end="", flush=True)
+            _print(f"\r{' ' * 60}\r", end="", flush=True)
 
             try:
                 text = future.result()
@@ -602,25 +613,25 @@ def run_review(results, active_models, question, context, blind_map=None):
                         error_detail = e.response.json()
                     except Exception:
                         error_detail = e.response.text[:500]
-                print(f"\n  {C['err']}{MODELS[key]['name']} review failed: {error_detail}{C['reset']}")
+                _print(f"\n  {C['err']}{MODELS[key]['name']} review failed: {error_detail}{C['reset']}")
 
             remaining = len(futures) - completed
             if remaining > 0:
                 waiting = [get_display_name(futures[f], blind_map) for f in futures if not f.done()]
-                print(f"\n{C['dim']}  Waiting for {', '.join(waiting)}...{C['reset']}", end="", flush=True)
+                _print(f"\n{C['dim']}  Waiting for {', '.join(waiting)}...{C['reset']}", end="", flush=True)
 
     # Calculate aggregate
     aggregate = calculate_aggregate_rankings(all_rankings, label_to_model)
 
     # Display aggregate rankings
-    print(f"\n\n{C['bold']}  Aggregate Rankings{C['reset']}")
-    print(f"  {'─' * 40}")
+    _print(f"\n\n{C['bold']}  Aggregate Rankings{C['reset']}")
+    _print(f"  {'─' * 40}")
     for rank, (model_key, avg, votes) in enumerate(aggregate, 1):
         name = get_display_name(model_key, blind_map)
-        print(f"  {rank}. {name}  — avg rank {avg} ({votes} votes)")
+        _print(f"  {rank}. {name}  — avg rank {avg} ({votes} votes)")
 
     total_time = time.time() - start
-    print(f"\n{C['system']}  Review complete · {total_time:.1f}s{C['reset']}")
+    _print(f"\n{C['system']}  Review complete · {total_time:.1f}s{C['reset']}")
 
     return all_rankings, label_to_model, aggregate, review_texts
 
@@ -702,19 +713,19 @@ def run_chairman(results, active_models, aggregate, question, context, chairman_
 
     header(f"Chairman Synthesis ({MODELS[chairman_key]['name']})")
     start = time.time()
-    print(f"\n{C['dim']}  Waiting for chairman...{C['reset']}", end="", flush=True)
+    _print(f"\n{C['dim']}  Waiting for chairman...{C['reset']}", end="", flush=True)
 
     api_key = os.environ.get(MODELS[chairman_key]["env_key"])
     if not api_key:
-        print(f"\n  {C['err']}Chairman {MODELS[chairman_key]['name']}: missing {MODELS[chairman_key]['env_key']}{C['reset']}")
+        _print(f"\n  {C['err']}Chairman {MODELS[chairman_key]['name']}: missing {MODELS[chairman_key]['env_key']}{C['reset']}")
         return None
 
     try:
         text = CALLERS[chairman_key](chairman_messages, api_key)
         elapsed = time.time() - start
-        print(f"\r{' ' * 60}\r", end="", flush=True)
+        _print(f"\r{' ' * 60}\r", end="", flush=True)
         model_header(chairman_key, elapsed)
-        print(text)
+        _print(text)
         return text
     except Exception as e:
         elapsed = time.time() - start
@@ -724,8 +735,8 @@ def run_chairman(results, active_models, aggregate, question, context, chairman_
                 error_detail = e.response.json()
             except Exception:
                 error_detail = e.response.text[:500]
-        print(f"\r{' ' * 60}\r", end="", flush=True)
-        print(f"\n  {C['err']}Chairman failed ({elapsed:.1f}s): {error_detail}{C['reset']}")
+        _print(f"\r{' ' * 60}\r", end="", flush=True)
+        _print(f"\n  {C['err']}Chairman failed ({elapsed:.1f}s): {error_detail}{C['reset']}")
         return None
 
 
@@ -753,8 +764,15 @@ def main():
                         help="Hide model identities until reveal at end")
     parser.add_argument("--no-chairman", action="store_true",
                         help="Skip review + synthesis stages")
+    parser.add_argument("--json", action="store_true",
+                        help="Output structured JSON (suppress terminal display)")
 
     args = parser.parse_args()
+
+    # Enable JSON mode globally
+    global JSON_MODE
+    if args.json:
+        JSON_MODE = True
 
     # Get question
     question = args.question
@@ -805,21 +823,21 @@ def main():
     # Display header
     header("Think Tank")
     model_names = " · ".join(MODELS[k]["name"] for k in active_models)
-    print(f"  {C['bold']}Models:{C['reset']} {model_names}")
+    _print(f"  {C['bold']}Models:{C['reset']} {model_names}")
     if token_report:
-        print(f"  {C['bold']}Context:{C['reset']} {', '.join(token_report)}")
+        _print(f"  {C['bold']}Context:{C['reset']} {', '.join(token_report)}")
     else:
-        print(f"  {C['dim']}No project context detected (run from a repo with CLAUDE.md){C['reset']}")
+        _print(f"  {C['dim']}No project context detected (run from a repo with CLAUDE.md){C['reset']}")
     q_preview = question[:120] + ("..." if len(question) > 120 else "")
-    print(f"  {C['bold']}Question:{C['reset']} {q_preview}")
+    _print(f"  {C['bold']}Question:{C['reset']} {q_preview}")
     if args.rounds > 1:
-        print(f"  {C['bold']}Rounds:{C['reset']} {args.rounds}")
+        _print(f"  {C['bold']}Rounds:{C['reset']} {args.rounds}")
     if args.interactive:
-        print(f"  {C['bold']}Mode:{C['reset']} Interactive")
+        _print(f"  {C['bold']}Mode:{C['reset']} Interactive")
     if not args.no_chairman:
-        print(f"  {C['bold']}Chairman:{C['reset']} {MODELS[args.chairman]['name']}")
+        _print(f"  {C['bold']}Chairman:{C['reset']} {MODELS[args.chairman]['name']}")
     if args.blind:
-        print(f"  {C['bold']}Mode:{C['reset']} Blind (identities hidden until reveal)")
+        _print(f"  {C['bold']}Mode:{C['reset']} Blind (identities hidden until reveal)")
 
     blind_map = create_blind_mapping(active_models) if args.blind else None
 
@@ -847,6 +865,12 @@ def main():
     if not args.no_chairman:
         transcript.append(f"**Chairman:** {MODELS[args.chairman]['name']}\n")
 
+    # ── JSON collection ─────────────────────────────────────────────────
+    json_rounds = []
+    json_review = None
+    json_synthesis = None
+    pipeline_start = time.time()
+
     # ── Round loop ───────────────────────────────────────────────────────
     total_rounds = args.rounds
     if args.interactive:
@@ -857,7 +881,14 @@ def main():
         round_num += 1
         header(f"Round {round_num}")
 
-        results = run_round(conversations, active_models, round_num, blind_map)
+        results, timings = run_round(conversations, active_models, round_num, blind_map)
+
+        # Collect for JSON output
+        round_data = {}
+        for key in active_models:
+            if results.get(key):
+                round_data[key] = {"text": results[key], "elapsed": round(timings.get(key, 0), 1)}
+        json_rounds.append({"round": round_num, "responses": round_data})
 
         # Save to transcript
         transcript.append(f"\n## Round {round_num}\n")
@@ -887,7 +918,7 @@ def main():
                         conversations[key].append({"role": "user", "content": delib_msg})
             elif args.interactive:
                 # Prompt for follow-up
-                print(f"\n{C['system']}{'─' * 50}{C['reset']}")
+                _print(f"\n{C['system']}{'─' * 50}{C['reset']}")
                 try:
                     follow_up = input(f"{C['bold']}  Continue (enter=deliberate, q=quit, or type follow-up): {C['reset']}").strip()
                 except (KeyboardInterrupt, EOFError):
@@ -931,6 +962,15 @@ def main():
                 final_responses, active_models, question, context, blind_map,
             )
 
+            # Collect review data for JSON
+            json_review = {
+                "rankings": [
+                    {"model": mk, "name": MODELS[mk]["name"], "avg_rank": avg, "votes": votes}
+                    for mk, avg, votes in aggregate
+                ],
+                "label_map": {label: mk for label, mk in label_to_model.items()},
+            }
+
             # Transcript: review section
             transcript.append(f"\n## Review (Anonymized Peer Ranking)\n")
             for key in active_models:
@@ -949,21 +989,22 @@ def main():
             )
 
             if chairman_text:
+                json_synthesis = chairman_text
                 transcript.append(f"\n## Chairman Synthesis\n{chairman_text}\n")
             else:
                 transcript.append("\n## Chairman Synthesis\n*Chairman failed — see aggregate rankings above.*\n")
         else:
-            print(f"\n{C['system']}  Skipping review — fewer than 2 models responded.{C['reset']}")
+            _print(f"\n{C['system']}  Skipping review — fewer than 2 models responded.{C['reset']}")
 
     # ── Blind reveal ────────────────────────────────────────────────────
     if args.blind:
-        print(f"\n{C['bold']}  ── Reveal ──────────{C['reset']}")
+        _print(f"\n{C['bold']}  ── Reveal ──────────{C['reset']}")
         if not args.no_chairman and label_to_model:
             for label, model_key in label_to_model.items():
-                print(f"  {label} → {MODELS[model_key]['name']}")
-            print()
+                _print(f"  {label} → {MODELS[model_key]['name']}")
+            _print()
         for key, panelist_name in blind_map.items():
-            print(f"  {panelist_name} → {MODELS[key]['name']}")
+            _print(f"  {panelist_name} → {MODELS[key]['name']}")
 
         transcript.append("\n## Reveal\n")
         if not args.no_chairman and label_to_model:
@@ -976,9 +1017,23 @@ def main():
     if args.save:
         save_path = Path(args.save)
         save_path.write_text("\n".join(transcript), encoding="utf-8")
-        print(f"\n{C['system']}Transcript saved to {save_path}{C['reset']}")
+        _print(f"\n{C['system']}Transcript saved to {save_path}{C['reset']}")
 
-    print(f"\n{C['bold']}Think Tank session complete.{C['reset']}\n")
+    # ── JSON output ─────────────────────────────────────────────────────
+    if JSON_MODE:
+        json_output = {
+            "question": question,
+            "models": [k for k in active_models if any(r["responses"].get(k) for r in json_rounds)],
+            "rounds": json_rounds,
+        }
+        if not args.no_chairman and json_review:
+            json_output["review"] = json_review
+        if not args.no_chairman and json_synthesis:
+            json_output["synthesis"] = json_synthesis
+        json_output["total_elapsed"] = round(time.time() - pipeline_start, 1)
+        print(json.dumps(json_output, ensure_ascii=False))
+    else:
+        _print(f"\n{C['bold']}Think Tank session complete.{C['reset']}\n")
 
 
 if __name__ == "__main__":
