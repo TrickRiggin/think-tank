@@ -26,7 +26,17 @@ Stages 3-4 skip with `--no-chairman`. Context-adaptive prompts drop "software pr
 | `gemini` | Gemini 3.1 Pro | Google AI native | `GOOGLE_AI_API_KEY` |
 | `grok` | Grok 4 | xAI (OpenAI-compatible) | `XAI_API_KEY` |
 
-Each model has its own `call_*` function because each API has slightly different request/response formats. Grok reuses the OpenAI format with a different base URL. No OpenRouter — direct API calls only, by design.
+Each model has its own `call_*` function because each API has slightly different request/response formats. Grok reuses the OpenAI format with a different base URL.
+
+### OpenRouter Fallback
+
+If `OPENROUTER_API_KEY` is set, any model missing its direct API key will automatically route through OpenRouter's OpenAI-compatible API. Direct keys always take priority — OpenRouter is purely a fallback.
+
+- Someone with all 4 direct keys: zero behavior change
+- Someone with only `OPENROUTER_API_KEY`: all 4 models route through OpenRouter
+- Mixed: direct keys used where available, OpenRouter fills the gaps
+
+The header and model display show "(via OpenRouter)" when a model is using the fallback. Routing is resolved by `resolve_api(key)` which returns the appropriate caller + key.
 
 ## Key Design Decisions
 

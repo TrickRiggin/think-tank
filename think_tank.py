@@ -33,10 +33,11 @@ def load_env_files():
         if env_path.exists():
             # Map friendly names -> expected env var names
             key_aliases = {
-                "OpenAI":    "OPENAI_API_KEY",
-                "Anthropic": "ANTHROPIC_API_KEY",
-                "Gemini":    "GOOGLE_AI_API_KEY",
-                "xAI":       "XAI_API_KEY",
+                "OpenAI":      "OPENAI_API_KEY",
+                "Anthropic":   "ANTHROPIC_API_KEY",
+                "Gemini":      "GOOGLE_AI_API_KEY",
+                "xAI":         "XAI_API_KEY",
+                "OpenRouter":  "OPENROUTER_API_KEY",
             }
             try:
                 for line in env_path.read_text(encoding="utf-8").splitlines():
@@ -93,21 +94,25 @@ MODELS = {
         "name":     "Claude Opus 4.6",
         "model_id": "claude-opus-4-6",
         "env_key":  "ANTHROPIC_API_KEY",
+        "openrouter_id": "anthropic/claude-opus-4-6",
     },
     "gpt": {
         "name":     "GPT-5.4",
         "model_id": "gpt-5.4",
         "env_key":  "OPENAI_API_KEY",
+        "openrouter_id": "openai/gpt-5.4",
     },
     "gemini": {
         "name":     "Gemini 3.1 Pro",
         "model_id": "gemini-3.1-pro-preview",
         "env_key":  "GOOGLE_AI_API_KEY",
+        "openrouter_id": "google/gemini-3.1-pro-preview",
     },
     "grok": {
         "name":     "Grok 4",
         "model_id": "grok-4",
         "env_key":  "XAI_API_KEY",
+        "openrouter_id": "x-ai/grok-4",
     },
 }
 
@@ -204,7 +209,38 @@ def call_grok(messages, api_key):
     return resp.json()["choices"][0]["message"]["content"]
 
 
+def call_openrouter(messages, api_key, model_id):
+    """Route any model through OpenRouter (OpenAI-compatible API)."""
+    resp = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": model_id,
+            "max_tokens": 4096,
+            "messages": messages,
+        },
+        timeout=180,
+    )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"]
+
+
 CALLERS = {"claude": call_claude, "gpt": call_gpt, "gemini": call_gemini, "grok": call_grok}
+
+
+def resolve_api(key):
+    """Resolve caller + key for a model. Direct API keys take priority; OpenRouter is fallback."""
+    direct_key = os.environ.get(MODELS[key]["env_key"])
+    if direct_key:
+        return CALLERS[key], direct_key, False
+    or_key = os.environ.get("OPENROUTER_API_KEY")
+    if or_key:
+        or_id = MODELS[key]["openrouter_id"]
+        return lambda msgs, ak: call_openrouter(msgs, ak, or_id), or_key, True
+    return None, None, False
 
 # ── Context detection ────────────────────────────────────────────────────────
 
@@ -424,12 +460,15 @@ def run_round(conversations, active_models, round_num, blind_map=None):
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {}
+        or_models = set()
         for key in active_models:
-            api_key = os.environ.get(MODELS[key]["env_key"])
-            if not api_key:
-                _print(f"\n  {C['err']}{MODELS[key]['name']}: missing {MODELS[key]['env_key']}{C['reset']}")
+            caller, api_key, via_or = resolve_api(key)
+            if not caller:
+                _print(f"\n  {C['err']}{MODELS[key]['name']}: no API key or OpenRouter fallback{C['reset']}")
                 continue
-            futures[pool.submit(CALLERS[key], conversations[key], api_key)] = key
+            if via_or:
+                or_models.add(key)
+            futures[pool.submit(caller, conversations[key], api_key)] = key
 
         completed = 0
         for future in as_completed(futures):
@@ -445,6 +484,8 @@ def run_round(conversations, active_models, round_num, blind_map=None):
                 results[key] = text
                 timings[key] = elapsed
                 display_name = get_display_name(key, blind_map)
+                if key in or_models:
+                    display_name += " (via OpenRouter)"
                 show_response(key, text, elapsed, display_name)
             except Exception as e:
                 error_detail = str(e)
@@ -586,10 +627,10 @@ def run_review(results, active_models, question, context, blind_map=None):
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {}
         for key in active_models:
-            api_key = os.environ.get(MODELS[key]["env_key"])
-            if not api_key:
+            caller, api_key, _via_or = resolve_api(key)
+            if not caller:
                 continue
-            futures[pool.submit(CALLERS[key], review_messages, api_key)] = key
+            futures[pool.submit(caller, review_messages, api_key)] = key
 
         completed = 0
         for future in as_completed(futures):
@@ -714,13 +755,13 @@ def run_chairman(results, active_models, aggregate, question, context, chairman_
     start = time.time()
     _print(f"\n{C['dim']}  Waiting for chairman...{C['reset']}", end="", flush=True)
 
-    api_key = os.environ.get(MODELS[chairman_key]["env_key"])
-    if not api_key:
-        _print(f"\n  {C['err']}Chairman {MODELS[chairman_key]['name']}: missing {MODELS[chairman_key]['env_key']}{C['reset']}")
+    caller, api_key, via_or = resolve_api(chairman_key)
+    if not caller:
+        _print(f"\n  {C['err']}Chairman {MODELS[chairman_key]['name']}: no API key or OpenRouter fallback{C['reset']}")
         return None
 
     try:
-        text = CALLERS[chairman_key](chairman_messages, api_key)
+        text = caller(chairman_messages, api_key)
         elapsed = time.time() - start
         _print(f"\r{' ' * 60}\r", end="", flush=True)
         model_header(chairman_key, elapsed)
@@ -801,14 +842,15 @@ def main():
 
     model_count = len(active_models)
 
-    # Check API keys
-    missing = [k for k in active_models if not os.environ.get(MODELS[k]["env_key"])]
+    # Check API keys (direct key OR OpenRouter fallback)
+    or_key = os.environ.get("OPENROUTER_API_KEY")
+    missing = [k for k in active_models if not os.environ.get(MODELS[k]["env_key"]) and not or_key]
     if missing:
         for k in missing:
-            print(f"{C['err']}Missing env var: {MODELS[k]['env_key']} (for {MODELS[k]['name']}){C['reset']}")
+            print(f"{C['err']}Missing: {MODELS[k]['env_key']} (for {MODELS[k]['name']}) — no OpenRouter fallback{C['reset']}")
         active_models = [k for k in active_models if k not in missing]
         if not active_models:
-            print(f"\n{C['err']}No models available. Set API key environment variables.{C['reset']}")
+            print(f"\n{C['err']}No models available. Set API keys or OPENROUTER_API_KEY.{C['reset']}")
             sys.exit(1)
         print(f"\n{C['system']}Continuing with: {', '.join(MODELS[k]['name'] for k in active_models)}{C['reset']}")
 
@@ -837,6 +879,10 @@ def main():
         _print(f"  {C['bold']}Chairman:{C['reset']} {MODELS[args.chairman]['name']}")
     if args.blind:
         _print(f"  {C['bold']}Mode:{C['reset']} Blind (identities hidden until reveal)")
+    if or_key:
+        or_routed = [MODELS[k]["name"] for k in active_models if not os.environ.get(MODELS[k]["env_key"])]
+        if or_routed:
+            _print(f"  {C['dim']}OpenRouter fallback: {', '.join(or_routed)}{C['reset']}")
 
     blind_map = create_blind_mapping(active_models) if args.blind else None
 
