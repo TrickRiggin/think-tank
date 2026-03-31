@@ -57,11 +57,52 @@ Each model has its own `call_*` function because each API has slightly different
 - Maps friendly names (OpenAI, Anthropic, Gemini, xAI) to standard env var names
 - Never overwrites already-set env vars
 
+## MCP Server (Claude Code Integration)
+
+`mcp_server.py` wraps Think Tank as an MCP server so Claude Code can call it as a native tool mid-conversation.
+
+### Tools Exposed
+| Tool | What it does | Maps to |
+|------|-------------|---------|
+| `think_tank_light` | 4 models answer in parallel, no review/synthesis | `--no-chairman --json` |
+| `think_tank_heavy` | Full pipeline: deliberation + review + chairman | `--rounds N --json` |
+
+Both accept: `question` (required), `files` (optional), `cwd` (optional for CLAUDE.md detection).
+
+### --json Flag
+Added to `think_tank.py` — suppresses all terminal output, emits structured JSON to stdout:
+```json
+{
+  "question": "...",
+  "models": ["claude", "gpt", "gemini", "grok"],
+  "rounds": [{"round": 1, "responses": {"claude": {"text": "...", "elapsed": 12.3}, ...}}],
+  "review": {"rankings": [...], "label_map": {...}},
+  "synthesis": "Chairman's final answer...",
+  "total_elapsed": 45.2
+}
+```
+Fields omitted when stages are skipped (light = no review/synthesis/deliberation).
+
+### Registration
+`~/.claude/.mcp.json`:
+```json
+{"mcpServers": {"think-tank": {"command": "python", "args": ["C:\\Users\\austi\\AI Stuff\\think-tank\\mcp_server.py"]}}}
+```
+
+### Key Details
+- MCP server shells out to `think_tank.py --json` as a subprocess (no import refactoring)
+- 5-minute timeout on subprocess calls
+- `_print()` wrapper gates all terminal output on global `JSON_MODE` flag
+- `run_round()` returns `(results, timings)` tuple to capture per-model elapsed time
+- CLI behavior completely unchanged without `--json`
+- Requires `mcp` pip package (`pip install mcp`)
+
 ## File Structure
 
 ```
 think-tank/
   think_tank.py          — the entire tool (single file)
+  mcp_server.py          — MCP server wrapper (Claude Code integration)
   README.md              — usage docs, flags, examples
   .gitignore             — excludes env files, pycache
   CLAUDE.md              — this file

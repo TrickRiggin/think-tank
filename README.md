@@ -43,6 +43,7 @@ Stages 3-4 run by default. Use `--no-chairman` to skip them.
 | `--models a,b` | `-m a,b` | names | Use specific models only (claude, gpt, gemini, grok) |
 | `--no-context` | — | — | Skip auto-detecting CLAUDE.md (general questions mode) |
 | `--prompt-file` | `-pf` | filepath | Read question from a file instead of command line |
+| `--json` | — | — | Output structured JSON, suppress terminal display (used by MCP server) |
 
 ## Models
 
