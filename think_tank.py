@@ -109,10 +109,10 @@ MODELS = {
         "openrouter_id": "google/gemini-3.1-pro-preview",
     },
     "grok": {
-        "name":     "Grok 4",
-        "model_id": "grok-4",
+        "name":     "Grok 4.2",
+        "model_id": "grok-4.2",
         "env_key":  "XAI_API_KEY",
-        "openrouter_id": "x-ai/grok-4",
+        "openrouter_id": "x-ai/grok-4.2",
     },
 }
 
