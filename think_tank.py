@@ -721,6 +721,65 @@ def run_review(results, active_models, question, context, blind_map=None):
     return all_rankings, label_to_model, aggregate, review_texts
 
 
+# ── Analysis (structured disagreement) ─────────────────────────────────────
+
+def run_analysis(results, active_models, question, context, chairman_key, blind_map=None):
+    """Run structured disagreement analysis. Returns analysis text or None on failure."""
+    responses_text = "\n\n---\n\n".join(
+        f"**{MODELS[key]['name']}:**\n{results[key]}"
+        for key in active_models if results.get(key)
+    )
+
+    model_count = len([k for k in active_models if results.get(k)])
+
+    if context:
+        prompt_text = ANALYSIS_PROMPT_PROJECT.format(
+            model_count=model_count, question=question,
+            context=context, responses_text=responses_text,
+        )
+    else:
+        prompt_text = ANALYSIS_PROMPT_GENERAL.format(
+            model_count=model_count, question=question,
+            responses_text=responses_text,
+        )
+
+    analysis_messages = [
+        {"role": "system", "content": "You are an expert analyst. Extract the structure of agreement and disagreement from multi-model responses. Be precise and specific."},
+        {"role": "user", "content": prompt_text},
+    ]
+
+    header("Analysis (Structured Disagreement)")
+    start = time.time()
+    _print(f"\n{C['dim']}  Waiting for analysis...{C['reset']}", end="", flush=True)
+
+    caller, api_key, via_or = resolve_api(chairman_key)
+    if not caller:
+        _print(f"\n  {C['err']}Analysis: {MODELS[chairman_key]['name']} — no API key or OpenRouter fallback{C['reset']}")
+        return None
+
+    try:
+        text = caller(analysis_messages, api_key)
+        elapsed = time.time() - start
+        _print(f"\r{' ' * 60}\r", end="", flush=True)
+        display_name = get_display_name(chairman_key, blind_map)
+        if via_or:
+            display_name += " (via OpenRouter)"
+        model_header(chairman_key, elapsed, display_name)
+        _print(text)
+        return text
+    except Exception as e:
+        elapsed = time.time() - start
+        error_detail = str(e)
+        if hasattr(e, "response") and e.response is not None:
+            try:
+                error_detail = e.response.json()
+            except Exception:
+                error_detail = e.response.text[:500]
+        _print(f"\r{' ' * 60}\r", end="", flush=True)
+        _print(f"\n  {C['err']}Analysis failed ({elapsed:.1f}s): {error_detail}{C['reset']}")
+        return None
+
+
 # ── Chairman synthesis ──────────────────────────────────────────────────────
 
 CHAIRMAN_PROMPT_PROJECT = """You are the chairman of a {model_count}-model think tank. Your job is to \
