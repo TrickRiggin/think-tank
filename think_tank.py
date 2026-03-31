@@ -404,6 +404,51 @@ DELIBERATION_PROMPT = """Here's what the other models said in the previous round
 Now respond to their points. Where do you agree? Where are they wrong? \
 What did they miss? Build on good ideas, challenge weak ones. Be specific."""
 
+ANALYSIS_PROMPT_PROJECT = """You are analyzing responses from a {model_count}-model think tank about a software project.
+
+Original question: {question}
+
+Project context:
+{context}
+
+Model responses:
+
+{responses_text}
+
+Analyze these responses and produce a structured breakdown. Be specific about which models hold which positions. Do not summarize the responses — only extract the structure.
+
+You MUST output exactly these three sections, even if a section has no items (write "None identified" in that case):
+
+CONSENSUS:
+- [Points where 2+ models substantively agree — not just similar wording, but actual agreement on claims or recommendations]
+
+DISAGREEMENTS:
+- [Point of contention] — [Model names] say X vs [Model names] say Y. Crux: [what fact, assumption, or priority the disagreement hinges on]
+
+UNRESOLVED:
+- [Important questions no model addressed, assumptions none validated, or information gaps that would change the answer]"""
+
+ANALYSIS_PROMPT_GENERAL = """You are analyzing responses from a {model_count}-model think tank.
+
+Original question: {question}
+
+Model responses:
+
+{responses_text}
+
+Analyze these responses and produce a structured breakdown. Be specific about which models hold which positions. Do not summarize the responses — only extract the structure.
+
+You MUST output exactly these three sections, even if a section has no items (write "None identified" in that case):
+
+CONSENSUS:
+- [Points where 2+ models substantively agree — not just similar wording, but actual agreement on claims or recommendations]
+
+DISAGREEMENTS:
+- [Point of contention] — [Model names] say X vs [Model names] say Y. Crux: [what fact, assumption, or priority the disagreement hinges on]
+
+UNRESOLVED:
+- [Important questions no model addressed, assumptions none validated, or information gaps that would change the answer]"""
+
 REVIEW_PROMPT_PROJECT = """You are reviewing anonymized responses to a question about a software project.
 
 Original question: {question}
