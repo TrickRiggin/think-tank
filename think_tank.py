@@ -25,7 +25,6 @@ from pathlib import Path
 def load_env_files():
     """Load API keys from .env files (home dir + cwd). No dependencies needed."""
     env_paths = [
-        Path.home() / "AI Stuff" / "keys.env",
         Path.home() / ".env",
         Path.home() / ".think_tank.env",
         Path.cwd() / ".env",

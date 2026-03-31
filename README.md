@@ -4,9 +4,8 @@ Multi-model deliberation tool. Sends one prompt to Claude Opus 4.6, GPT-5.4, Gem
 
 ## Setup
 
-- **API Keys**: Loaded from `~/AI Stuff/keys.env` (also set as Windows user environment variables)
-- **PowerShell alias**: `think_tank` works from any directory (defined in PowerShell profile)
-- **Bash alias**: `think_tank` works in Git Bash (defined in `~/.bashrc`)
+- **API Keys**: Loaded from `~/.env`, `~/.think_tank.env`, or `./.env` (searches multiple locations; also works with Windows user environment variables)
+- **Shell alias**: `think_tank` works from any directory (define in your shell profile)
 - **Context**: Auto-detects `CLAUDE.md` when run from inside a repo directory
 
 ## Usage

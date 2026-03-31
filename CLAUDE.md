@@ -53,7 +53,7 @@ Each model has its own `call_*` function because each API has slightly different
 - `--no-context` drops all project awareness (general questions mode)
 
 ### Env Loading
-- Loads from `~/AI Stuff/keys.env`, `~/.env`, `~/.think_tank.env`, `./env`
+- Loads from `~/.env`, `~/.think_tank.env`, `./.env` (and any custom path in the ENV_PATHS list)
 - Maps friendly names (OpenAI, Anthropic, Gemini, xAI) to standard env var names
 - Never overwrites already-set env vars
 
@@ -86,7 +86,7 @@ Fields omitted when stages are skipped (light = no review/synthesis/deliberation
 ### Registration
 `~/.claude/.mcp.json`:
 ```json
-{"mcpServers": {"think-tank": {"command": "python", "args": ["C:\\Users\\austi\\AI Stuff\\think-tank\\mcp_server.py"]}}}
+{"mcpServers": {"think-tank": {"command": "python", "args": ["/path/to/think-tank/mcp_server.py"]}}}
 ```
 
 ### Key Details
