@@ -796,10 +796,14 @@ Individual responses:
 Peer rankings:
 {rankings_text}
 
+Structured analysis:
+{analysis_text}
+
 Synthesize a single, definitive answer. Prioritize:
-- Points where multiple models agreed
+- Points where multiple models agreed (see CONSENSUS above)
+- Resolving the identified disagreements with clear reasoning
+- Addressing unresolved gaps where possible
 - Insights from higher-ranked responses
-- Corrections that emerged during deliberation
 - Concrete, actionable recommendations
 
 Be direct. This is the final word."""
@@ -815,16 +819,20 @@ Individual responses:
 Peer rankings:
 {rankings_text}
 
+Structured analysis:
+{analysis_text}
+
 Synthesize a single, definitive answer. Prioritize:
-- Points where multiple models agreed
+- Points where multiple models agreed (see CONSENSUS above)
+- Resolving the identified disagreements with clear reasoning
+- Addressing unresolved gaps where possible
 - Insights from higher-ranked responses
-- Corrections that emerged during deliberation
 - Concrete, actionable recommendations
 
 Be direct. This is the final word."""
 
 
-def run_chairman(results, active_models, aggregate, question, context, chairman_key):
+def run_chairman(results, active_models, aggregate, question, context, chairman_key, analysis_text=None):
     """Run chairman synthesis stage. Returns synthesized text or None on failure."""
     responses_text = "\n\n---\n\n".join(
         f"**{MODELS[key]['name']}:**\n{results[key]}"
@@ -843,11 +851,13 @@ def run_chairman(results, active_models, aggregate, question, context, chairman_
             model_count=model_count, question=question,
             context=context, responses_text=responses_text,
             rankings_text=rankings_text,
+            analysis_text=analysis_text or "Analysis not available.",
         )
     else:
         prompt_text = CHAIRMAN_PROMPT_GENERAL.format(
             model_count=model_count, question=question,
             responses_text=responses_text, rankings_text=rankings_text,
+            analysis_text=analysis_text or "Analysis not available.",
         )
 
     chairman_messages = [
