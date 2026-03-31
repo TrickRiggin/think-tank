@@ -360,6 +360,51 @@ DELIBERATION_PROMPT = """Here's what the other models said in the previous round
 Now respond to their points. Where do you agree? Where are they wrong? \
 What did they miss? Build on good ideas, challenge weak ones. Be specific."""
 
+REVIEW_PROMPT_PROJECT = """You are reviewing anonymized responses to a question about a software project.
+
+Original question: {question}
+
+Project context:
+{context}
+
+Here are the responses:
+
+{responses_text}
+
+Evaluate each response on:
+- Accuracy and correctness
+- Completeness — did it address the full question?
+- Practical value — could you act on this advice?
+- Reasoning quality — is the logic sound?
+
+After your evaluation, provide your final ranking in this exact format:
+
+FINAL RANKING:
+{ranking_slots}
+
+Do not add any text after the ranking."""
+
+REVIEW_PROMPT_GENERAL = """You are reviewing anonymized responses to a question.
+
+Original question: {question}
+
+Here are the responses:
+
+{responses_text}
+
+Evaluate each response on:
+- Accuracy and correctness
+- Completeness — did it address the full question?
+- Practical value — could you act on this advice?
+- Reasoning quality — is the logic sound?
+
+After your evaluation, provide your final ranking in this exact format:
+
+FINAL RANKING:
+{ranking_slots}
+
+Do not add any text after the ranking."""
+
 
 def run_round(conversations, active_models, round_num, blind_map=None):
     """Run one round of parallel API calls. Returns {model_key: response_text}."""
@@ -421,6 +466,163 @@ def build_deliberation_message(results, exclude_key):
         if key != exclude_key and text:
             parts.append(f"**{MODELS[key]['name']}:**\n{text}")
     return DELIBERATION_PROMPT.format(other_responses="\n\n---\n\n".join(parts))
+
+
+def anonymize_responses(results, active_models):
+    """Assign random Response A/B/C/D labels to model responses.
+
+    Returns:
+        tuple: (anonymized_responses dict {label: text}, label_to_model dict {label: model_key})
+    """
+    responding = [k for k in active_models if results.get(k)]
+    labels = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")[:len(responding)]
+    shuffled = responding.copy()
+    random.shuffle(shuffled)
+
+    anonymized = {}
+    label_to_model = {}
+    for key, label in zip(shuffled, labels):
+        full_label = f"Response {label}"
+        anonymized[full_label] = results[key]
+        label_to_model[full_label] = key
+
+    return anonymized, label_to_model
+
+
+def parse_ranking(text):
+    """Extract FINAL RANKING from review text. Returns list of 'Response X' labels."""
+    if "FINAL RANKING:" not in text:
+        matches = re.findall(r'Response [A-Z]', text)
+        return matches
+
+    ranking_section = text.split("FINAL RANKING:")[1]
+    numbered = re.findall(r'\d+\.\s*Response [A-Z]', ranking_section)
+    if numbered:
+        return [re.search(r'Response [A-Z]', m).group() for m in numbered]
+
+    return re.findall(r'Response [A-Z]', ranking_section)
+
+
+def calculate_aggregate_rankings(all_rankings, label_to_model):
+    """Compute average rank position for each model across all reviewers.
+
+    Args:
+        all_rankings: list of (model_key, parsed_ranking_list) tuples
+        label_to_model: dict mapping 'Response X' -> model_key
+
+    Returns:
+        list of (model_key, avg_rank, vote_count) sorted best to worst
+    """
+    from collections import defaultdict
+    positions = defaultdict(list)
+
+    for _reviewer, ranking in all_rankings:
+        for pos, label in enumerate(ranking, start=1):
+            if label in label_to_model:
+                model_key = label_to_model[label]
+                positions[model_key].append(pos)
+
+    aggregate = []
+    for model_key, pos_list in positions.items():
+        avg = sum(pos_list) / len(pos_list)
+        aggregate.append((model_key, round(avg, 2), len(pos_list)))
+
+    aggregate.sort(key=lambda x: x[1])
+    return aggregate
+
+
+def run_review(results, active_models, question, context, blind_map=None):
+    """Run anonymized peer review stage.
+
+    Returns:
+        tuple: (all_rankings, label_to_model, aggregate, review_texts)
+    """
+    anonymized, label_to_model = anonymize_responses(results, active_models)
+
+    # Build responses text block
+    responses_text = "\n\n---\n\n".join(
+        f"{label}:\n{text}" for label, text in anonymized.items()
+    )
+
+    # Build ranking slot placeholder
+    ranking_slots = "\n".join(
+        f"{i}. Response X" for i in range(1, len(anonymized) + 1)
+    )
+
+    # Select prompt template
+    if context:
+        prompt_text = REVIEW_PROMPT_PROJECT.format(
+            question=question, context=context,
+            responses_text=responses_text, ranking_slots=ranking_slots,
+        )
+    else:
+        prompt_text = REVIEW_PROMPT_GENERAL.format(
+            question=question,
+            responses_text=responses_text, ranking_slots=ranking_slots,
+        )
+
+    review_messages = [
+        {"role": "system", "content": "You are a careful, objective evaluator."},
+        {"role": "user", "content": prompt_text},
+    ]
+
+    header("Review (Anonymized Peer Ranking)")
+    start = time.time()
+    print(f"\n{C['dim']}  Waiting for reviews...{C['reset']}", end="", flush=True)
+
+    review_texts = {}
+    all_rankings = []
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {}
+        for key in active_models:
+            api_key = os.environ.get(MODELS[key]["env_key"])
+            if not api_key:
+                continue
+            futures[pool.submit(CALLERS[key], review_messages, api_key)] = key
+
+        completed = 0
+        for future in as_completed(futures):
+            key = futures[future]
+            elapsed = time.time() - start
+            completed += 1
+            print(f"\r{' ' * 60}\r", end="", flush=True)
+
+            try:
+                text = future.result()
+                review_texts[key] = text
+                parsed = parse_ranking(text)
+                all_rankings.append((key, parsed))
+                display_name = get_display_name(key, blind_map)
+                show_response(key, text, elapsed, display_name)
+            except Exception as e:
+                error_detail = str(e)
+                if hasattr(e, "response") and e.response is not None:
+                    try:
+                        error_detail = e.response.json()
+                    except Exception:
+                        error_detail = e.response.text[:500]
+                print(f"\n  {C['err']}{MODELS[key]['name']} review failed: {error_detail}{C['reset']}")
+
+            remaining = len(futures) - completed
+            if remaining > 0:
+                waiting = [get_display_name(futures[f], blind_map) for f in futures if not f.done()]
+                print(f"\n{C['dim']}  Waiting for {', '.join(waiting)}...{C['reset']}", end="", flush=True)
+
+    # Calculate aggregate
+    aggregate = calculate_aggregate_rankings(all_rankings, label_to_model)
+
+    # Display aggregate rankings
+    print(f"\n\n{C['bold']}  Aggregate Rankings{C['reset']}")
+    print(f"  {'─' * 40}")
+    for rank, (model_key, avg, votes) in enumerate(aggregate, 1):
+        name = get_display_name(model_key, blind_map)
+        print(f"  {rank}. {name}  — avg rank {avg} ({votes} votes)")
+
+    total_time = time.time() - start
+    print(f"\n{C['system']}  Review complete · {total_time:.1f}s{C['reset']}")
+
+    return all_rankings, label_to_model, aggregate, review_texts
 
 
 def main():
