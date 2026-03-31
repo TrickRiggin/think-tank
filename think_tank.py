@@ -36,6 +36,7 @@ def load_env_files():
                 "OpenAI":    "OPENAI_API_KEY",
                 "Anthropic": "ANTHROPIC_API_KEY",
                 "Gemini":    "GOOGLE_AI_API_KEY",
+                "xAI":       "XAI_API_KEY",
             }
             try:
                 for line in env_path.read_text(encoding="utf-8").splitlines():
@@ -68,6 +69,7 @@ C = {
     "claude": "\033[38;5;208m",   # amber/orange
     "gpt":    "\033[38;5;114m",   # green
     "gemini": "\033[38;5;75m",    # blue
+    "grok":   "\033[38;5;205m",   # magenta
     "system": "\033[38;5;245m",   # gray
     "bold":   "\033[1m",
     "dim":    "\033[2m",
@@ -92,6 +94,11 @@ MODELS = {
         "name":     "Gemini 3.1 Pro",
         "model_id": "gemini-3.1-pro-preview",
         "env_key":  "GOOGLE_AI_API_KEY",
+    },
+    "grok": {
+        "name":     "Grok 4",
+        "model_id": "grok-4",
+        "env_key":  "XAI_API_KEY",
     },
 }
 
@@ -170,7 +177,25 @@ def call_gemini(messages, api_key):
     return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
 
 
-CALLERS = {"claude": call_claude, "gpt": call_gpt, "gemini": call_gemini}
+def call_grok(messages, api_key):
+    resp = requests.post(
+        "https://api.x.ai/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": MODELS["grok"]["model_id"],
+            "max_completion_tokens": 4096,
+            "messages": messages,
+        },
+        timeout=180,
+    )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"]
+
+
+CALLERS = {"claude": call_claude, "gpt": call_gpt, "gemini": call_gemini, "grok": call_grok}
 
 # ── Context detection ────────────────────────────────────────────────────────
 
@@ -316,7 +341,7 @@ def run_round(conversations, active_models, round_num):
 
     print(f"\n{C['dim']}  Waiting for models...{C['reset']}", end="", flush=True)
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {}
         for key in active_models:
             api_key = os.environ.get(MODELS[key]["env_key"])
@@ -387,7 +412,7 @@ def main():
     parser.add_argument("--interactive", "-i", action="store_true", help="Interactive follow-up mode")
     parser.add_argument("--save", "-s", help="Save transcript to file")
     parser.add_argument("--no-context", action="store_true", help="Skip auto-detecting CLAUDE.md")
-    parser.add_argument("--models", "-m", help="Comma-separated model keys (claude,gpt,gemini)")
+    parser.add_argument("--models", "-m", help="Comma-separated model keys (claude,gpt,gemini,grok)")
 
     args = parser.parse_args()
 
@@ -407,7 +432,7 @@ def main():
         active_models = [k.strip() for k in args.models.split(",")]
         invalid = [k for k in active_models if k not in MODELS]
         if invalid:
-            print(f"{C['err']}Unknown models: {', '.join(invalid)}. Use: claude, gpt, gemini{C['reset']}")
+            print(f"{C['err']}Unknown models: {', '.join(invalid)}. Use: claude, gpt, gemini, grok{C['reset']}")
             sys.exit(1)
     else:
         active_models = list(MODELS.keys())
