@@ -13,6 +13,7 @@ Usage:
 import argparse
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -292,16 +293,17 @@ def header(text):
     print(f"{C['bold']}{bar}{C['reset']}\n")
 
 
-def model_header(model_key, elapsed=None):
+def model_header(model_key, elapsed=None, display_name=None):
     info = MODELS[model_key]
     color = C[model_key]
+    name = display_name or info["name"]
     time_str = f" ({elapsed:.1f}s)" if elapsed else ""
-    print(f"\n{color}{C['bold']}▌ {info['name']}{time_str}{C['reset']}")
+    print(f"\n{color}{C['bold']}▌ {name}{time_str}{C['reset']}")
     print(f"{color}{'─' * 40}{C['reset']}")
 
 
-def show_response(model_key, text, elapsed=None):
-    model_header(model_key, elapsed)
+def show_response(model_key, text, elapsed=None, display_name=None):
+    model_header(model_key, elapsed, display_name)
     print(text)
 
 
@@ -311,6 +313,21 @@ def spinner_frames():
     while True:
         yield frames[i % len(frames)]
         i += 1
+
+
+def create_blind_mapping(active_models):
+    """Create a random mapping of model keys to Panelist A/B/C/D labels."""
+    labels = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")[:len(active_models)]
+    shuffled = active_models.copy()
+    random.shuffle(shuffled)
+    return {key: f"Panelist {label}" for key, label in zip(shuffled, labels)}
+
+
+def get_display_name(model_key, blind_map=None):
+    """Return model display name, respecting blind mode."""
+    if blind_map and model_key in blind_map:
+        return blind_map[model_key]
+    return MODELS[model_key]["name"]
 
 
 # ── Core logic ───────────────────────────────────────────────────────────────
@@ -344,7 +361,7 @@ Now respond to their points. Where do you agree? Where are they wrong? \
 What did they miss? Build on good ideas, challenge weak ones. Be specific."""
 
 
-def run_round(conversations, active_models, round_num):
+def run_round(conversations, active_models, round_num, blind_map=None):
     """Run one round of parallel API calls. Returns {model_key: response_text}."""
     results = {}
     start = time.time()
@@ -372,7 +389,8 @@ def run_round(conversations, active_models, round_num):
             try:
                 text = future.result()
                 results[key] = text
-                show_response(key, text, elapsed)
+                display_name = get_display_name(key, blind_map)
+                show_response(key, text, elapsed, display_name)
             except Exception as e:
                 error_detail = str(e)
                 # Try to extract API error message
@@ -386,7 +404,7 @@ def run_round(conversations, active_models, round_num):
 
             remaining = len(futures) - completed
             if remaining > 0:
-                waiting = [MODELS[futures[f]]["name"] for f in futures if not f.done()]
+                waiting = [get_display_name(futures[f], blind_map) for f in futures if not f.done()]
                 print(f"\n{C['dim']}  Waiting for {', '.join(waiting)}...{C['reset']}", end="", flush=True)
 
     total_time = time.time() - start
@@ -497,6 +515,8 @@ def main():
     if args.blind:
         print(f"  {C['bold']}Mode:{C['reset']} Blind (identities hidden until reveal)")
 
+    blind_map = create_blind_mapping(active_models) if args.blind else None
+
     # Build initial messages
     system_template = SYSTEM_PROMPT_PROJECT if context else SYSTEM_PROMPT_GENERAL
     system_msg = system_template.format(model_count=model_count)
@@ -527,13 +547,14 @@ def main():
         round_num += 1
         header(f"Round {round_num}")
 
-        results = run_round(conversations, active_models, round_num)
+        results = run_round(conversations, active_models, round_num, blind_map)
 
         # Save to transcript
         transcript.append(f"\n## Round {round_num}\n")
         for key in active_models:
             if results.get(key):
-                transcript.append(f"### {MODELS[key]['name']}\n{results[key]}\n")
+                name = get_display_name(key, blind_map)
+                transcript.append(f"### {name}\n{results[key]}\n")
 
         # Update conversation histories with responses
         for key in active_models:
