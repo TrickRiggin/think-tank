@@ -625,6 +625,110 @@ def run_review(results, active_models, question, context, blind_map=None):
     return all_rankings, label_to_model, aggregate, review_texts
 
 
+# ── Chairman synthesis ──────────────────────────────────────────────────────
+
+CHAIRMAN_PROMPT_PROJECT = """You are the chairman of a {model_count}-model think tank. Your job is to \
+synthesize the best possible answer from the council's work.
+
+Original question: {question}
+
+Project context:
+{context}
+
+Individual responses:
+{responses_text}
+
+Peer rankings:
+{rankings_text}
+
+Synthesize a single, definitive answer. Prioritize:
+- Points where multiple models agreed
+- Insights from higher-ranked responses
+- Corrections that emerged during deliberation
+- Concrete, actionable recommendations
+
+Be direct. This is the final word."""
+
+CHAIRMAN_PROMPT_GENERAL = """You are the chairman of a {model_count}-model think tank. Your job is to \
+synthesize the best possible answer from the council's work.
+
+Original question: {question}
+
+Individual responses:
+{responses_text}
+
+Peer rankings:
+{rankings_text}
+
+Synthesize a single, definitive answer. Prioritize:
+- Points where multiple models agreed
+- Insights from higher-ranked responses
+- Corrections that emerged during deliberation
+- Concrete, actionable recommendations
+
+Be direct. This is the final word."""
+
+
+def run_chairman(results, active_models, aggregate, question, context, chairman_key):
+    """Run chairman synthesis stage. Returns synthesized text or None on failure."""
+    responses_text = "\n\n---\n\n".join(
+        f"**{MODELS[key]['name']}:**\n{results[key]}"
+        for key in active_models if results.get(key)
+    )
+
+    rankings_text = "\n".join(
+        f"  {rank}. {MODELS[mk]['name']} — avg rank {avg}"
+        for rank, (mk, avg, _) in enumerate(aggregate, 1)
+    )
+
+    model_count = len([k for k in active_models if results.get(k)])
+
+    if context:
+        prompt_text = CHAIRMAN_PROMPT_PROJECT.format(
+            model_count=model_count, question=question,
+            context=context, responses_text=responses_text,
+            rankings_text=rankings_text,
+        )
+    else:
+        prompt_text = CHAIRMAN_PROMPT_GENERAL.format(
+            model_count=model_count, question=question,
+            responses_text=responses_text, rankings_text=rankings_text,
+        )
+
+    chairman_messages = [
+        {"role": "system", "content": "You are the chairman of a multi-model think tank. Synthesize the council's work into a single authoritative answer."},
+        {"role": "user", "content": prompt_text},
+    ]
+
+    header(f"Chairman Synthesis ({MODELS[chairman_key]['name']})")
+    start = time.time()
+    print(f"\n{C['dim']}  Waiting for chairman...{C['reset']}", end="", flush=True)
+
+    api_key = os.environ.get(MODELS[chairman_key]["env_key"])
+    if not api_key:
+        print(f"\n  {C['err']}Chairman {MODELS[chairman_key]['name']}: missing {MODELS[chairman_key]['env_key']}{C['reset']}")
+        return None
+
+    try:
+        text = CALLERS[chairman_key](chairman_messages, api_key)
+        elapsed = time.time() - start
+        print(f"\r{' ' * 60}\r", end="", flush=True)
+        model_header(chairman_key, elapsed)
+        print(text)
+        return text
+    except Exception as e:
+        elapsed = time.time() - start
+        error_detail = str(e)
+        if hasattr(e, "response") and e.response is not None:
+            try:
+                error_detail = e.response.json()
+            except Exception:
+                error_detail = e.response.text[:500]
+        print(f"\r{' ' * 60}\r", end="", flush=True)
+        print(f"\n  {C['err']}Chairman failed ({elapsed:.1f}s): {error_detail}{C['reset']}")
+        return None
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Think Tank — Multi-model deliberation",
@@ -738,6 +842,10 @@ def main():
     transcript = []
     transcript.append(f"# Think Tank — {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
     transcript.append(f"**Question:** {question}\n")
+    model_names_str = ", ".join(get_display_name(k, blind_map) for k in active_models)
+    transcript.append(f"**Models:** {model_names_str}\n")
+    if not args.no_chairman:
+        transcript.append(f"**Chairman:** {MODELS[args.chairman]['name']}\n")
 
     # ── Round loop ───────────────────────────────────────────────────────
     total_rounds = args.rounds
@@ -802,6 +910,67 @@ def main():
                             msg = f"{other_context}\n\n---\n\nThe user has a follow-up:\n\n{follow_up}"
                             conversations[key].append({"role": "user", "content": msg})
                     transcript.append(f"\n**Follow-up:** {follow_up}\n")
+
+    # ── Review + Synthesis (unless --no-chairman) ────────────────────────
+    chairman_text = None
+    label_to_model = {}
+    if not args.no_chairman:
+        # Gather final responses (last response from each model)
+        final_responses = {}
+        for key in active_models:
+            if conversations[key]:
+                for msg in reversed(conversations[key]):
+                    if msg["role"] == "assistant":
+                        final_responses[key] = msg["content"]
+                        break
+
+        responding = [k for k in active_models if final_responses.get(k)]
+
+        if len(responding) >= 2:
+            all_rankings, label_to_model, aggregate, review_texts = run_review(
+                final_responses, active_models, question, context, blind_map,
+            )
+
+            # Transcript: review section
+            transcript.append(f"\n## Review (Anonymized Peer Ranking)\n")
+            for key in active_models:
+                if review_texts.get(key):
+                    name = get_display_name(key, blind_map)
+                    transcript.append(f"### {name}'s Review\n{review_texts[key]}\n")
+            transcript.append("### Aggregate Rankings\n")
+            for rank, (mk, avg, votes) in enumerate(aggregate, 1):
+                name = get_display_name(mk, blind_map)
+                transcript.append(f"{rank}. {name} — avg rank {avg} ({votes} votes)\n")
+
+            # Chairman synthesis
+            chairman_text = run_chairman(
+                final_responses, active_models, aggregate,
+                question, context, args.chairman,
+            )
+
+            if chairman_text:
+                transcript.append(f"\n## Chairman Synthesis\n{chairman_text}\n")
+            else:
+                transcript.append("\n## Chairman Synthesis\n*Chairman failed — see aggregate rankings above.*\n")
+        else:
+            print(f"\n{C['system']}  Skipping review — fewer than 2 models responded.{C['reset']}")
+
+    # ── Blind reveal ────────────────────────────────────────────────────
+    if args.blind:
+        print(f"\n{C['bold']}  ── Reveal ──────────{C['reset']}")
+        if not args.no_chairman and label_to_model:
+            for label, model_key in label_to_model.items():
+                print(f"  {label} → {MODELS[model_key]['name']}")
+            print()
+        for key, panelist_name in blind_map.items():
+            print(f"  {panelist_name} → {MODELS[key]['name']}")
+
+        transcript.append("\n## Reveal\n")
+        if not args.no_chairman and label_to_model:
+            for label, model_key in label_to_model.items():
+                transcript.append(f"- {label} → {MODELS[model_key]['name']}\n")
+        for key, panelist_name in blind_map.items():
+            transcript.append(f"- {panelist_name} → {MODELS[key]['name']}\n")
 
     # ── Save transcript ──────────────────────────────────────────────────
     if args.save:
