@@ -11,11 +11,12 @@ Everything lives in `think_tank.py`. The pipeline:
 ```
 Stage 1: COLLECT      — All 4 models answer in parallel (ThreadPoolExecutor)
 Stage 2: DELIBERATE   — Optional rounds where models challenge each other (--rounds)
-Stage 3: REVIEW       — Anonymized peer ranking (Response A/B/C/D, randomly shuffled)
-Stage 4: SYNTHESIZE   — Chairman produces final answer (default: Claude Opus 4.6)
+Stage 3: ANALYZE      — Chairman extracts consensus, disagreements, unresolved gaps
+Stage 4: REVIEW       — Anonymized peer ranking (Response A/B/C/D, randomly shuffled)
+Stage 5: SYNTHESIZE   — Chairman produces final answer with analysis + rankings as input
 ```
 
-Stages 3-4 skip with `--no-chairman`. Context-adaptive prompts drop "software project" language when no CLAUDE.md is detected or `--no-context` is used.
+Stages 4-5 skip with `--no-chairman`. Stage 3 (analysis) still runs with `--no-chairman` if 2+ models responded. Context-adaptive prompts drop "software project" language when no CLAUDE.md is detected or `--no-context` is used.
 
 ## Models & API Callers
 
