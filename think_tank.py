@@ -555,12 +555,13 @@ def run_round(conversations, active_models, round_num, blind_map=None):
     return results, timings
 
 
-def build_deliberation_message(results, exclude_key):
+def build_deliberation_message(results, exclude_key, blind_map=None):
     """Build the 'here's what others said' message for a model."""
     parts = []
     for key, text in results.items():
         if key != exclude_key and text:
-            parts.append(f"**{MODELS[key]['name']}:**\n{text}")
+            name = get_display_name(key, blind_map)
+            parts.append(f"**{name}:**\n{text}")
     return DELIBERATION_PROMPT.format(other_responses="\n\n---\n\n".join(parts))
 
 
@@ -1074,7 +1075,7 @@ def main():
                 # Auto-continue to next deliberation round
                 for key in active_models:
                     if results.get(key):
-                        delib_msg = build_deliberation_message(results, key)
+                        delib_msg = build_deliberation_message(results, key, blind_map)
                         conversations[key].append({"role": "user", "content": delib_msg})
             elif args.interactive:
                 # Prompt for follow-up
@@ -1090,14 +1091,14 @@ def main():
                     # Default: deliberation round
                     for key in active_models:
                         if results.get(key):
-                            delib_msg = build_deliberation_message(results, key)
+                            delib_msg = build_deliberation_message(results, key, blind_map)
                             conversations[key].append({"role": "user", "content": delib_msg})
                 else:
                     # User typed a follow-up question
                     # Include other models' responses + new question
                     for key in active_models:
                         if results.get(key):
-                            other_context = build_deliberation_message(results, key)
+                            other_context = build_deliberation_message(results, key, blind_map)
                             msg = f"{other_context}\n\n---\n\nThe user has a follow-up:\n\n{follow_up}"
                             conversations[key].append({"role": "user", "content": msg})
                     transcript.append(f"\n**Follow-up:** {follow_up}\n")

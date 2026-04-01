@@ -60,7 +60,7 @@ The header and model display show "(via OpenRouter)" when a model is using the f
 - Chairman can be a council member (default) or external
 
 ### Blind Mode (--blind)
-- Display-layer only — models still know each other during deliberation
+- Models see anonymized names (Panelist A/B/C/D) in both display and deliberation messages
 - Separate random shuffle from the review-stage shuffle (prevents cross-referencing)
 - Reveal section at the end maps both Panelist and Response labels to real names
 
