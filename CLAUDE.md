@@ -25,7 +25,7 @@ Stages 4-5 skip with `--no-chairman`. Stage 3 (analysis) still runs with `--no-c
 | `claude` | Claude Opus 4.6 | Anthropic native | `ANTHROPIC_API_KEY` |
 | `gpt` | GPT-5.4 | OpenAI native | `OPENAI_API_KEY` |
 | `gemini` | Gemini 3.1 Pro | Google AI native | `GOOGLE_AI_API_KEY` |
-| `grok` | Grok 4 | xAI (OpenAI-compatible) | `XAI_API_KEY` |
+| `grok` | Grok 4.20 | xAI (OpenAI-compatible) | `XAI_API_KEY` |
 
 Each model has its own `call_*` function because each API has slightly different request/response formats. Grok reuses the OpenAI format with a different base URL.
 
@@ -41,13 +41,20 @@ The header and model display show "(via OpenRouter)" when a model is using the f
 
 ## Key Design Decisions
 
-### Anonymized Review (Stage 3)
+### Structured Analysis (Stage 3)
+- Chairman model extracts CONSENSUS, DISAGREEMENTS, and UNRESOLVED sections
+- Runs even with `--no-chairman` (makes lightweight mode much more useful)
+- Analysis output fed into chairman synthesis prompt for better final answers
+- Skipped if fewer than 2 models responded
+- `run_analysis()` function, uses `ANALYSIS_PROMPT_PROJECT` / `ANALYSIS_PROMPT_GENERAL`
+
+### Anonymized Review (Stage 4)
 - Models evaluate "Response A/B/C/D" — labels are randomly shuffled each run
 - Each model produces a `FINAL RANKING:` section that gets parsed with regex
 - Fallback parsing if models don't follow the exact format
 - Aggregate scores computed as average rank position across all reviewers
 
-### Chairman Synthesis (Stage 4)
+### Chairman Synthesis (Stage 5)
 - Default chairman is Claude Opus (`--chairman` flag to change)
 - Chairman sees de-anonymized responses + aggregate rankings
 - Chairman can be a council member (default) or external
@@ -65,7 +72,7 @@ The header and model display show "(via OpenRouter)" when a model is using the f
 
 ### Env Loading
 - Loads from `~/.env`, `~/.think_tank.env`, `./.env` (and any custom path in the ENV_PATHS list)
-- Maps friendly names (OpenAI, Anthropic, Gemini, xAI) to standard env var names
+- Maps friendly names (OpenAI, Anthropic, Gemini, xAI, OpenRouter) to standard env var names
 - Never overwrites already-set env vars
 
 ## MCP Server (Claude Code Integration)
@@ -87,12 +94,13 @@ Added to `think_tank.py` — suppresses all terminal output, emits structured JS
   "question": "...",
   "models": ["claude", "gpt", "gemini", "grok"],
   "rounds": [{"round": 1, "responses": {"claude": {"text": "...", "elapsed": 12.3}, ...}}],
+  "analysis": "CONSENSUS:\n- ...\n\nDISAGREEMENTS:\n- ...\n\nUNRESOLVED:\n- ...",
   "review": {"rankings": [...], "label_map": {...}},
   "synthesis": "Chairman's final answer...",
   "total_elapsed": 45.2
 }
 ```
-Fields omitted when stages are skipped (light = no review/synthesis/deliberation).
+Fields omitted when stages are skipped (light = no review/synthesis, but analysis still runs).
 
 ### Registration
 `~/.claude/.mcp.json`:
@@ -129,7 +137,7 @@ Aliases defined in PowerShell profile and `~/.bashrc` so `think_tank` works from
 ```bash
 think_tank "Your question"                    # full pipeline, 4 models
 think_tank --no-context "General question"    # no software context
-think_tank --no-chairman "Quick opinions"     # skip review + synthesis (v1 behavior)
+think_tank --no-chairman "Quick opinions"     # skip review + synthesis, still runs analysis
 think_tank -r 2 -b -s out.md "Design Q"      # 2 rounds, blind, save transcript
 ```
 
