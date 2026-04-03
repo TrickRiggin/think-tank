@@ -1,6 +1,6 @@
 # Think Tank
 
-Multi-model deliberation tool. Sends one prompt to Claude Opus 4.6, GPT-5.4, Gemini 3.1 Pro, and Grok 4 in parallel. Optional multi-round deliberation, anonymized peer review, and chairman synthesis.
+Multi-model deliberation tool. Sends one prompt to Claude Opus 4.6, GPT-5.4, Gemini 3.1 Pro, and Grok 4.20 in parallel. Optional multi-round deliberation, anonymized peer review, and chairman synthesis.
 
 ## Setup
 
@@ -21,11 +21,12 @@ Run from inside a repo directory to auto-include project context.
 ```
 Stage 1: COLLECT      All models answer in parallel
 Stage 2: DELIBERATE   Optional rounds where models challenge each other (--rounds)
-Stage 3: REVIEW       Anonymized peer ranking (Response A/B/C/D)
-Stage 4: SYNTHESIZE   Chairman produces final answer (default: Claude Opus 4.6)
+Stage 3: ANALYZE      Chairman extracts consensus, disagreements, unresolved gaps
+Stage 4: REVIEW       Anonymized peer ranking (Response A/B/C/D)
+Stage 5: SYNTHESIZE   Chairman produces final answer (default: Claude Opus 4.6)
 ```
 
-Stages 3-4 run by default. Use `--no-chairman` to skip them.
+Stages 4-5 run by default. Use `--no-chairman` to skip them (analysis still runs if 2+ models responded).
 
 ## Flags
 
@@ -51,7 +52,7 @@ Stages 3-4 run by default. Use `--no-chairman` to skip them.
 | `claude` | Claude Opus 4.6 | Yes (default chairman) |
 | `gpt` | GPT-5.4 | Yes |
 | `gemini` | Gemini 3.1 Pro | Yes |
-| `grok` | Grok 4 | Yes |
+| `grok` | Grok 4.20 | Yes |
 
 ## Examples
 
@@ -87,15 +88,58 @@ think_tank --no-context "Compare Redis vs Memcached for session storage"
 think_tank -m claude,gpt "Quick sanity check on this approach"
 ```
 
+## API Keys
+
+Each model needs its own API key, set via environment variable:
+
+| Model | Env Var |
+|-------|---------|
+| Claude | `ANTHROPIC_API_KEY` |
+| GPT | `OPENAI_API_KEY` |
+| Gemini | `GOOGLE_AI_API_KEY` |
+| Grok | `XAI_API_KEY` |
+
+### OpenRouter Fallback
+
+If `OPENROUTER_API_KEY` is set, any model missing its direct API key automatically routes through [OpenRouter](https://openrouter.ai). Direct keys always take priority — OpenRouter fills the gaps.
+
+- All 4 direct keys set: OpenRouter never used
+- Only `OPENROUTER_API_KEY`: all models route through OpenRouter
+- Mixed: direct keys where available, OpenRouter for the rest
+
+## MCP Server (Claude Code Integration)
+
+`mcp_server.py` wraps Think Tank as an MCP server so Claude Code can call it as a native tool mid-conversation.
+
+### Tools
+
+| Tool | What it does |
+|------|-------------|
+| `think_tank_light` | 4 models answer in parallel, no review/synthesis |
+| `think_tank_heavy` | Full pipeline: deliberation + review + chairman synthesis |
+
+Both accept a question, optional file paths, and an optional working directory for CLAUDE.md auto-detection.
+
+### Setup
+
+Register globally (all Claude Code sessions):
+
+```bash
+claude mcp add -s user think-tank -- python /path/to/think-tank/mcp_server.py
+```
+
+Requires the `mcp` pip package (`pip install mcp`).
+
 ## How It Works
 
 1. Auto-detects `CLAUDE.md` by walking up from current directory (like git)
 2. Sends your question + context to all models in parallel
 3. Displays responses as they arrive (color-coded per model in terminal)
 4. If `--rounds` > 1: feeds each model the others' responses for deliberation
-5. **Review**: Anonymizes all responses as Response A/B/C/D (randomly shuffled), each model evaluates and ranks them
-6. **Synthesis**: Chairman model takes all responses + rankings and produces the final answer
-7. If `--blind`: reveals model identity mapping at the very end
+5. **Analysis**: Chairman extracts consensus points, disagreements, and unresolved gaps
+6. **Review**: Anonymizes all responses as Response A/B/C/D (randomly shuffled), each model evaluates and ranks them
+7. **Synthesis**: Chairman model takes all responses + analysis + rankings and produces the final answer
+8. If `--blind`: reveals model identity mapping at the very end
 
 ## Tips
 
