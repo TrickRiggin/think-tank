@@ -112,7 +112,7 @@ MODELS = {
         "name":     "Grok 4.20",
         "model_id": "grok-4.20-0309-non-reasoning",
         "env_key":  "XAI_API_KEY",
-        "openrouter_id": "x-ai/grok-4.20-0309-non-reasoning",
+        "openrouter_id": "x-ai/grok-4.20",
     },
 }
 
