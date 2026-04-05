@@ -32,14 +32,15 @@ def _run_think_tank(question: str, extra_args: list[str] = None, cwd: str = None
     try:
         result = subprocess.run(
             cmd,
+            stdin=subprocess.DEVNULL,  # don't inherit MCP server's stdio pipe
             capture_output=True,
             text=True,
-            timeout=300,  # 5 min max
+            timeout=600,  # 10 min max — heavy pipeline with complex questions needs headroom
             cwd=work_dir,
             env={**os.environ},
         )
     except subprocess.TimeoutExpired:
-        return {"error": "Think Tank timed out after 5 minutes"}
+        return {"error": "Think Tank timed out after 10 minutes"}
 
     if result.returncode != 0:
         return {"error": f"Think Tank failed (exit {result.returncode})", "stderr": result.stderr[-1000:]}
