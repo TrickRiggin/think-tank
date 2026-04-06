@@ -110,7 +110,8 @@ Fields omitted when stages are skipped (light = no review/synthesis, but analysi
 
 ### Key Details
 - MCP server shells out to `think_tank.py --json` as a subprocess (no import refactoring)
-- 5-minute timeout on subprocess calls
+- 10-minute timeout on subprocess calls (bumped from 5min — heavy pipeline was timing out)
+- `stdin=subprocess.DEVNULL` prevents child from inheriting MCP stdio pipe
 - `_print()` wrapper gates all terminal output on global `JSON_MODE` flag
 - `run_round()` returns `(results, timings)` tuple to capture per-model elapsed time
 - CLI behavior completely unchanged without `--json`
@@ -126,8 +127,8 @@ think-tank/
   .gitignore             — excludes env files, pycache
   CLAUDE.md              — this file
   docs/superpowers/
-    specs/               — design spec from brainstorming session
-    plans/               — implementation plan
+    specs/               — design specs (Think Tank v2, analysis layer, Wisemen web dashboard)
+    plans/               — implementation plans (Think Tank v2, analysis layer, Wisemen)
 ```
 
 ## Running It
@@ -147,6 +148,10 @@ think_tank -r 2 -b -s out.md "Design Q"      # 2 rounds, blind, save transcript
 - The user's original workflow was: run Think Tank, save transcript, manually feed to Claude for synthesis. v2 automates that last step.
 - No tests — this is a personal tool, vibe-coded. Verify manually.
 - `requests` is the only external dependency (stdlib otherwise + `random` for shuffling)
+
+## Related Projects
+
+- **Wisemen** (`../Wisemen/`) — Web-based companion to this CLI. SvelteKit on Cloudflare Pages/Workers. Separate repo (TrickRiggin/Wisemen). Shares the same pipeline logic (ported to TypeScript) but adds persistent conversations, profiles, and streaming UI. Deployed at `wisemen.austinarlt.ai`.
 
 ## Port Configuration
 
