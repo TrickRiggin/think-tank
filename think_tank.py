@@ -23,7 +23,7 @@ from pathlib import Path
 
 
 def load_env_files():
-    """Load API keys from .env files (home dir + cwd). No dependencies needed."""
+    """Load config from .env files (home dir + cwd). No dependencies needed."""
     env_paths = [
         Path.home() / ".env",
         Path.home() / ".think_tank.env",
@@ -31,13 +31,8 @@ def load_env_files():
     ]
     for env_path in env_paths:
         if env_path.exists():
-            # Map friendly names -> expected env var names
             key_aliases = {
-                "OpenAI":      "OPENAI_API_KEY",
-                "Anthropic":   "ANTHROPIC_API_KEY",
-                "Gemini":      "GOOGLE_AI_API_KEY",
-                "xAI":         "XAI_API_KEY",
-                "OpenRouter":  "OPENROUTER_API_KEY",
+                "OpenRouter": "OPENROUTER_API_KEY",
             }
             try:
                 for line in env_path.read_text(encoding="utf-8").splitlines():
@@ -48,7 +43,6 @@ def load_env_files():
                         key, _, value = line.partition("=")
                         key = key.strip()
                         value = value.strip().strip("'\"")
-                        # Remap friendly names to standard env var names
                         env_name = key_aliases.get(key, key)
                         if env_name and not os.environ.get(env_name):
                             os.environ[env_name] = value
@@ -92,27 +86,19 @@ C = {
 MODELS = {
     "claude": {
         "name":     "Claude Opus 4.6",
-        "model_id": "claude-opus-4-6",
-        "env_key":  "ANTHROPIC_API_KEY",
-        "openrouter_id": "anthropic/claude-opus-4-6",
+        "model_id": "anthropic/claude-opus-4.6",
     },
     "gpt": {
         "name":     "GPT-5.4",
-        "model_id": "gpt-5.4",
-        "env_key":  "OPENAI_API_KEY",
-        "openrouter_id": "openai/gpt-5.4",
+        "model_id": "openai/gpt-5.4",
     },
     "gemini": {
         "name":     "Gemini 3.1 Pro",
-        "model_id": "gemini-3.1-pro-preview",
-        "env_key":  "GOOGLE_AI_API_KEY",
-        "openrouter_id": "google/gemini-3.1-pro-preview",
+        "model_id": "google/gemini-3.1-pro-preview",
     },
     "grok": {
         "name":     "Grok 4.20",
-        "model_id": "grok-4.20-0309-non-reasoning",
-        "env_key":  "XAI_API_KEY",
-        "openrouter_id": "x-ai/grok-4.20",
+        "model_id": "x-ai/grok-4.20",
     },
 }
 
@@ -120,97 +106,8 @@ MODELS = {
 
 import requests
 
-def call_claude(messages, api_key):
-    system_parts = [m["content"] for m in messages if m["role"] == "system"]
-    system_text = "\n\n".join(system_parts)
-    api_messages = [m for m in messages if m["role"] != "system"]
-
-    resp = requests.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-        json={
-            "model": MODELS["claude"]["model_id"],
-            "max_tokens": 4096,
-            "system": system_text,
-            "messages": api_messages,
-        },
-        timeout=180,
-    )
-    resp.raise_for_status()
-    return resp.json()["content"][0]["text"]
-
-
-def call_gpt(messages, api_key):
-    resp = requests.post(
-        "https://api.openai.com/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": MODELS["gpt"]["model_id"],
-            "max_completion_tokens": 4096,
-            "messages": messages,
-        },
-        timeout=180,
-    )
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
-
-
-def call_gemini(messages, api_key):
-    system_text = ""
-    contents = []
-    for m in messages:
-        if m["role"] == "system":
-            system_text += m["content"] + "\n\n"
-        elif m["role"] == "user":
-            contents.append({"role": "user", "parts": [{"text": m["content"]}]})
-        elif m["role"] == "assistant":
-            contents.append({"role": "model", "parts": [{"text": m["content"]}]})
-
-    body = {
-        "contents": contents,
-        "generationConfig": {"maxOutputTokens": 4096},
-    }
-    if system_text.strip():
-        body["systemInstruction"] = {"parts": [{"text": system_text.strip()}]}
-
-    resp = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{MODELS['gemini']['model_id']}:generateContent",
-        params={"key": api_key},
-        headers={"Content-Type": "application/json"},
-        json=body,
-        timeout=180,
-    )
-    resp.raise_for_status()
-    return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-
-
-def call_grok(messages, api_key):
-    resp = requests.post(
-        "https://api.x.ai/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": MODELS["grok"]["model_id"],
-            "max_completion_tokens": 4096,
-            "messages": messages,
-        },
-        timeout=180,
-    )
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
-
-
 def call_openrouter(messages, api_key, model_id):
-    """Route any model through OpenRouter (OpenAI-compatible API)."""
+    """Call a model through OpenRouter's OpenAI-compatible API."""
     resp = requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
         headers={
@@ -228,19 +125,13 @@ def call_openrouter(messages, api_key, model_id):
     return resp.json()["choices"][0]["message"]["content"]
 
 
-CALLERS = {"claude": call_claude, "gpt": call_gpt, "gemini": call_gemini, "grok": call_grok}
-
-
 def resolve_api(key):
-    """Resolve caller + key for a model. Direct API keys take priority; OpenRouter is fallback."""
-    direct_key = os.environ.get(MODELS[key]["env_key"])
-    if direct_key:
-        return CALLERS[key], direct_key, False
+    """Resolve the OpenRouter caller for a model."""
     or_key = os.environ.get("OPENROUTER_API_KEY")
     if or_key:
-        or_id = MODELS[key]["openrouter_id"]
-        return lambda msgs, ak: call_openrouter(msgs, ak, or_id), or_key, True
-    return None, None, False
+        model_id = MODELS[key]["model_id"]
+        return lambda msgs, ak: call_openrouter(msgs, ak, model_id), or_key
+    return None, None
 
 # ── Context detection ────────────────────────────────────────────────────────
 
@@ -505,14 +396,11 @@ def run_round(conversations, active_models, round_num, blind_map=None):
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {}
-        or_models = set()
         for key in active_models:
-            caller, api_key, via_or = resolve_api(key)
+            caller, api_key = resolve_api(key)
             if not caller:
-                _print(f"\n  {C['err']}{MODELS[key]['name']}: no API key or OpenRouter fallback{C['reset']}")
+                _print(f"\n  {C['err']}{MODELS[key]['name']}: OPENROUTER_API_KEY not set{C['reset']}")
                 continue
-            if via_or:
-                or_models.add(key)
             futures[pool.submit(caller, conversations[key], api_key)] = key
 
         completed = 0
@@ -529,8 +417,6 @@ def run_round(conversations, active_models, round_num, blind_map=None):
                 results[key] = text
                 timings[key] = elapsed
                 display_name = get_display_name(key, blind_map)
-                if key in or_models:
-                    display_name += " (via OpenRouter)"
                 show_response(key, text, elapsed, display_name)
             except Exception as e:
                 error_detail = str(e)
@@ -673,7 +559,7 @@ def run_review(results, active_models, question, context, blind_map=None):
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {}
         for key in active_models:
-            caller, api_key, _via_or = resolve_api(key)
+            caller, api_key = resolve_api(key)
             if not caller:
                 continue
             futures[pool.submit(caller, review_messages, api_key)] = key
@@ -753,9 +639,9 @@ def run_analysis(results, active_models, question, context, chairman_key, blind_
     start = time.time()
     _print(f"\n{C['dim']}  Waiting for analysis...{C['reset']}", end="", flush=True)
 
-    caller, api_key, via_or = resolve_api(chairman_key)
+    caller, api_key = resolve_api(chairman_key)
     if not caller:
-        _print(f"\n  {C['err']}Analysis: {MODELS[chairman_key]['name']} — no API key or OpenRouter fallback{C['reset']}")
+        _print(f"\n  {C['err']}Analysis: {MODELS[chairman_key]['name']} — OPENROUTER_API_KEY not set{C['reset']}")
         return None
 
     try:
@@ -763,8 +649,6 @@ def run_analysis(results, active_models, question, context, chairman_key, blind_
         elapsed = time.time() - start
         _print(f"\r{' ' * 60}\r", end="", flush=True)
         display_name = get_display_name(chairman_key, blind_map)
-        if via_or:
-            display_name += " (via OpenRouter)"
         model_header(chairman_key, elapsed, display_name)
         _print(text)
         return text
@@ -870,9 +754,9 @@ def run_chairman(results, active_models, aggregate, question, context, chairman_
     start = time.time()
     _print(f"\n{C['dim']}  Waiting for chairman...{C['reset']}", end="", flush=True)
 
-    caller, api_key, via_or = resolve_api(chairman_key)
+    caller, api_key = resolve_api(chairman_key)
     if not caller:
-        _print(f"\n  {C['err']}Chairman {MODELS[chairman_key]['name']}: no API key or OpenRouter fallback{C['reset']}")
+        _print(f"\n  {C['err']}Chairman {MODELS[chairman_key]['name']}: OPENROUTER_API_KEY not set{C['reset']}")
         return None
 
     try:
@@ -913,8 +797,8 @@ def main():
     parser.add_argument("--save", "-s", help="Save transcript to file")
     parser.add_argument("--no-context", action="store_true", help="Skip auto-detecting CLAUDE.md")
     parser.add_argument("--models", "-m", help="Comma-separated model keys (claude,gpt,gemini,grok)")
-    parser.add_argument("--chairman", "-c", default="claude",
-                        help="Model key for chairman synthesis (default: claude)")
+    parser.add_argument("--chairman", "-c", default="grok",
+                        help="Model key for chairman synthesis (default: grok)")
     parser.add_argument("--blind", "-b", action="store_true",
                         help="Hide model identities until reveal at end")
     parser.add_argument("--no-chairman", action="store_true",
@@ -957,17 +841,9 @@ def main():
 
     model_count = len(active_models)
 
-    # Check API keys (direct key OR OpenRouter fallback)
-    or_key = os.environ.get("OPENROUTER_API_KEY")
-    missing = [k for k in active_models if not os.environ.get(MODELS[k]["env_key"]) and not or_key]
-    if missing:
-        for k in missing:
-            print(f"{C['err']}Missing: {MODELS[k]['env_key']} (for {MODELS[k]['name']}) — no OpenRouter fallback{C['reset']}")
-        active_models = [k for k in active_models if k not in missing]
-        if not active_models:
-            print(f"\n{C['err']}No models available. Set API keys or OPENROUTER_API_KEY.{C['reset']}")
-            sys.exit(1)
-        print(f"\n{C['system']}Continuing with: {', '.join(MODELS[k]['name'] for k in active_models)}{C['reset']}")
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        print(f"{C['err']}Missing: OPENROUTER_API_KEY. This tool now routes all models through OpenRouter.{C['reset']}")
+        sys.exit(1)
 
     # Build context
     if args.no_context:
@@ -994,10 +870,7 @@ def main():
         _print(f"  {C['bold']}Chairman:{C['reset']} {MODELS[args.chairman]['name']}")
     if args.blind:
         _print(f"  {C['bold']}Mode:{C['reset']} Blind (identities hidden until reveal)")
-    if or_key:
-        or_routed = [MODELS[k]["name"] for k in active_models if not os.environ.get(MODELS[k]["env_key"])]
-        if or_routed:
-            _print(f"  {C['dim']}OpenRouter fallback: {', '.join(or_routed)}{C['reset']}")
+    _print(f"  {C['dim']}Provider: OpenRouter{C['reset']}")
 
     blind_map = create_blind_mapping(active_models) if args.blind else None
 

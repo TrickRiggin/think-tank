@@ -2,7 +2,7 @@
 
 ## What This Is
 
-CLI multi-model deliberation tool. Sends a prompt to 4 LLMs in parallel, optional multi-round deliberation, anonymized peer review with structured rankings, and chairman synthesis. Single-file Python script, no web UI, no framework dependencies beyond `requests`.
+CLI multi-model deliberation tool. Sends a prompt to 4 LLMs in parallel through OpenRouter, optional multi-round deliberation, anonymized peer review with structured rankings, and chairman synthesis. Single-file Python script, no web UI, no framework dependencies beyond `requests`.
 
 ## Architecture
 
@@ -20,24 +20,14 @@ Stages 4-5 skip with `--no-chairman`. Stage 3 (analysis) still runs with `--no-c
 
 ## Models & API Callers
 
-| Key | Model | API | Env Var |
-|-----|-------|-----|---------|
-| `claude` | Claude Opus 4.6 | Anthropic native | `ANTHROPIC_API_KEY` |
-| `gpt` | GPT-5.4 | OpenAI native | `OPENAI_API_KEY` |
-| `gemini` | Gemini 3.1 Pro | Google AI native | `GOOGLE_AI_API_KEY` |
-| `grok` | Grok 4.20 | xAI (OpenAI-compatible) | `XAI_API_KEY` |
+| Key | Model | Route | Env Var |
+|-----|-------|-------|---------|
+| `claude` | Claude Opus 4.6 | OpenRouter | `OPENROUTER_API_KEY` |
+| `gpt` | GPT-5.4 | OpenRouter | `OPENROUTER_API_KEY` |
+| `gemini` | Gemini 3.1 Pro | OpenRouter | `OPENROUTER_API_KEY` |
+| `grok` | Grok 4.20 | OpenRouter | `OPENROUTER_API_KEY` |
 
-Each model has its own `call_*` function because each API has slightly different request/response formats. Grok reuses the OpenAI format with a different base URL.
-
-### OpenRouter Fallback
-
-If `OPENROUTER_API_KEY` is set, any model missing its direct API key will automatically route through OpenRouter's OpenAI-compatible API. Direct keys always take priority — OpenRouter is purely a fallback.
-
-- Someone with all 4 direct keys: zero behavior change
-- Someone with only `OPENROUTER_API_KEY`: all 4 models route through OpenRouter
-- Mixed: direct keys used where available, OpenRouter fills the gaps
-
-The header and model display show "(via OpenRouter)" when a model is using the fallback. Routing is resolved by `resolve_api(key)` which returns the appropriate caller + key.
+All model calls go through `call_openrouter()`. The per-provider callers and per-provider keys were removed to keep configuration dead simple.
 
 ## Key Design Decisions
 
@@ -55,7 +45,7 @@ The header and model display show "(via OpenRouter)" when a model is using the f
 - Aggregate scores computed as average rank position across all reviewers
 
 ### Chairman Synthesis (Stage 5)
-- Default chairman is Claude Opus (`--chairman` flag to change)
+- Default chairman is Grok (`--chairman` flag to change)
 - Chairman sees de-anonymized responses + aggregate rankings
 - Chairman can be a council member (default) or external
 
@@ -71,13 +61,14 @@ The header and model display show "(via OpenRouter)" when a model is using the f
 - `--no-context` drops all project awareness (general questions mode)
 
 ### Env Loading
-- Loads from `~/.env`, `~/.think_tank.env`, `./.env` (and any custom path in the ENV_PATHS list)
-- Maps friendly names (OpenAI, Anthropic, Gemini, xAI, OpenRouter) to standard env var names
+- Loads from `~/.env`, `~/.think_tank.env`, `./.env`
+- Uses `OPENROUTER_API_KEY` for every model call
+- Maps friendly `OpenRouter` to `OPENROUTER_API_KEY`
 - Never overwrites already-set env vars
 
-## MCP Server (Claude Code Integration)
+## Optional MCP Server
 
-`mcp_server.py` wraps Think Tank as an MCP server so Claude Code can call it as a native tool mid-conversation.
+`mcp_server.py` is an optional wrapper that exposes Think Tank as MCP tools.
 
 ### Tools Exposed
 | Tool | What it does | Maps to |
@@ -147,7 +138,7 @@ think_tank -r 2 -b -s out.md "Design Q"      # 2 rounds, blind, save transcript
 - Inspired by karpathy/llm-council but stays CLI-first and project-aware
 - The user's original workflow was: run Think Tank, save transcript, manually feed to Claude for synthesis. v2 automates that last step.
 - No tests — this is a personal tool, vibe-coded. Verify manually.
-- `requests` is the only external dependency (stdlib otherwise + `random` for shuffling)
+- `requests` is the only runtime dependency for the CLI (plus stdlib + `random` for shuffling)
 
 ## Related Projects
 

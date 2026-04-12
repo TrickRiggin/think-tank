@@ -1,10 +1,10 @@
 # Think Tank
 
-Multi-model deliberation tool. Sends one prompt to Claude Opus 4.6, GPT-5.4, Gemini 3.1 Pro, and Grok 4.20 in parallel. Optional multi-round deliberation, anonymized peer review, and chairman synthesis.
+Multi-model deliberation tool. Sends one prompt to Claude Opus 4.6, GPT-5.4, Gemini 3.1 Pro, and Grok 4.20 in parallel through OpenRouter. Optional multi-round deliberation, anonymized peer review, and chairman synthesis.
 
 ## Setup
 
-- **API Keys**: Loaded from `~/.env`, `~/.think_tank.env`, or `./.env` (searches multiple locations; also works with Windows user environment variables)
+- **API Key**: Set `OPENROUTER_API_KEY` in `~/.env`, `~/.think_tank.env`, or `./.env` (searches multiple locations; also works with Windows user environment variables)
 - **Shell alias**: Add to your shell profile so `think_tank` works from any directory:
   ```bash
   # Bash (~/.bashrc)
@@ -33,7 +33,7 @@ Stage 1: COLLECT      All models answer in parallel
 Stage 2: DELIBERATE   Optional rounds where models challenge each other (--rounds)
 Stage 3: ANALYZE      Chairman extracts consensus, disagreements, unresolved gaps
 Stage 4: REVIEW       Anonymized peer ranking (Response A/B/C/D)
-Stage 5: SYNTHESIZE   Chairman produces final answer (default: Claude Opus 4.6)
+Stage 5: SYNTHESIZE   Chairman produces final answer (default: Grok 4.20)
 ```
 
 Stages 4-5 run by default. Use `--no-chairman` to skip them (analysis still runs if 2+ models responded).
@@ -42,7 +42,7 @@ Stages 4-5 run by default. Use `--no-chairman` to skip them (analysis still runs
 
 | Flag | Short | Value | What it does |
 |------|-------|-------|-------------|
-| `--chairman` | `-c` | model key | Which model synthesizes the final answer (default: claude) |
+| `--chairman` | `-c` | model key | Which model synthesizes the final answer (default: grok) |
 | `--blind` | `-b` | — | Hide model identities until reveal at end |
 | `--no-chairman` | | — | Skip review + synthesis stages (original behavior) |
 | `--deep` | `-d` | — | Include MEMORY.md from .claude project memory |
@@ -59,10 +59,10 @@ Stages 4-5 run by default. Use `--no-chairman` to skip them (analysis still runs
 
 | Key | Model | Chairman-eligible |
 |-----|-------|-------------------|
-| `claude` | Claude Opus 4.6 | Yes (default chairman) |
+| `claude` | Claude Opus 4.6 | Yes |
 | `gpt` | GPT-5.4 | Yes |
 | `gemini` | Gemini 3.1 Pro | Yes |
-| `grok` | Grok 4.20 | Yes |
+| `grok` | Grok 4.20 | Yes (default chairman) |
 
 ## Examples
 
@@ -79,8 +79,8 @@ think_tank -r 2 "What's the right caching strategy here?"
 # Blind mode — hide model identities from yourself
 think_tank -b "Which database should we use for this workload?"
 
-# Use Gemini as chairman instead of Claude
-think_tank -c gemini "Compare these two architectures"
+# Use Claude as chairman instead of the default Grok
+think_tank -c claude "Compare these two architectures"
 
 # Skip review + synthesis — just get raw responses (original behavior)
 think_tank --no-chairman "Quick sanity check"
@@ -98,28 +98,17 @@ think_tank --no-context "Compare Redis vs Memcached for session storage"
 think_tank -m claude,gpt "Quick sanity check on this approach"
 ```
 
-## API Keys
+## API Key
 
-Each model needs its own API key, set via environment variable:
+This repo now uses OpenRouter only. Set:
 
-| Model | Env Var |
-|-------|---------|
-| Claude | `ANTHROPIC_API_KEY` |
-| GPT | `OPENAI_API_KEY` |
-| Gemini | `GOOGLE_AI_API_KEY` |
-| Grok | `XAI_API_KEY` |
+- `OPENROUTER_API_KEY`
 
-### OpenRouter Fallback
+Direct provider keys are no longer used by `think_tank.py`.
 
-If `OPENROUTER_API_KEY` is set, any model missing its direct API key automatically routes through [OpenRouter](https://openrouter.ai). Direct keys always take priority — OpenRouter fills the gaps.
+## Optional MCP Server
 
-- All 4 direct keys set: OpenRouter never used
-- Only `OPENROUTER_API_KEY`: all models route through OpenRouter
-- Mixed: direct keys where available, OpenRouter for the rest
-
-## MCP Server (Claude Code Integration)
-
-`mcp_server.py` wraps Think Tank as an MCP server so Claude Code can call it as a native tool mid-conversation.
+If you still want Claude Code integration, `mcp_server.py` wraps Think Tank as an MCP server.
 
 ### Tools
 
