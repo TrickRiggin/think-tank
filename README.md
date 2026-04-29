@@ -1,6 +1,6 @@
 # Think Tank
 
-Multi-model deliberation tool. Sends one prompt to Claude Opus 4.6, GPT-5.4, Gemini 3.1 Pro, and Grok 4.20 in parallel through OpenRouter. Optional multi-round deliberation, anonymized peer review, and chairman synthesis.
+CLI multi-model deliberation tool. Sends one prompt to Claude Opus 4.7, GPT-5.5, Gemini 3.1 Pro, and Grok 4.20 in parallel through OpenRouter. Optional crux framing, deliberation rounds, anonymized peer review, and chairman synthesis.
 
 ## Setup
 
@@ -29,11 +29,12 @@ Run from inside a repo directory to auto-include project context.
 ## Pipeline
 
 ```
+Stage 0: CRUX        Optional framing pass (--crux)
 Stage 1: COLLECT      All models answer in parallel
 Stage 2: DELIBERATE   Optional rounds where models challenge each other (--rounds)
 Stage 3: ANALYZE      Chairman extracts consensus, disagreements, unresolved gaps
-Stage 4: REVIEW       Anonymized peer ranking (Response A/B/C/D)
-Stage 5: SYNTHESIZE   Chairman produces final answer (default: Grok 4.20)
+Stage 4: REVIEW       Leave-one-out anonymized peer ranking (Response A/B/C/D)
+Stage 5: SYNTHESIZE   Chairman compiles the final answer (default: Grok 4.20)
 ```
 
 Stages 4-5 run by default. Use `--no-chairman` to skip them (analysis still runs if 2+ models responded).
@@ -44,23 +45,25 @@ Stages 4-5 run by default. Use `--no-chairman` to skip them (analysis still runs
 |------|-------|-------|-------------|
 | `--chairman` | `-c` | model key | Which model synthesizes the final answer (default: grok) |
 | `--blind` | `-b` | — | Hide model identities until reveal at end |
-| `--no-chairman` | | — | Skip review + synthesis stages (original behavior) |
+| `--no-chairman` | | — | Skip review + synthesis stages; analysis still runs with 2+ responses |
+| `--crux` | | — | Run a framing pass before collection |
+| `--red-team MODEL` | `-R` | model key | Assign one model an adversarial critique role |
 | `--deep` | `-d` | — | Include MEMORY.md from .claude project memory |
-| `--rounds N` | `-r N` | number | Deliberation rounds (models respond to each other) |
+| `--rounds N` | `-r N` | number | Deliberation rounds after the initial answer pass (default: 0) |
 | `--files x,y` | `-f x,y` | paths | Include specific files as context |
 | `--save path` | `-s path` | filepath | Save full transcript to file |
 | `--interactive` | `-i` | — | Open-ended mode with follow-up prompts |
 | `--models a,b` | `-m a,b` | names | Use specific models only (claude, gpt, gemini, grok) |
-| `--no-context` | — | — | Skip auto-detecting CLAUDE.md (general questions mode) |
+| `--no-context` | — | — | Skip auto project context; explicit `--files` still load |
 | `--prompt-file` | `-pf` | filepath | Read question from a file instead of command line |
-| `--json` | — | — | Output structured JSON, suppress terminal display (used by MCP server) |
+| `--json` | — | — | Output structured JSON, suppress terminal display |
 
 ## Models
 
 | Key | Model | Chairman-eligible |
 |-----|-------|-------------------|
-| `claude` | Claude Opus 4.6 | Yes |
-| `gpt` | GPT-5.4 | Yes |
+| `claude` | Claude Opus 4.7 | Yes |
+| `gpt` | GPT-5.5 | Yes |
 | `gemini` | Gemini 3.1 Pro | Yes |
 | `grok` | Grok 4.20 | Yes (default chairman) |
 
@@ -73,8 +76,14 @@ think_tank "Should we split this into microservices?"
 # Include specific source files for a code question
 think_tank -f src/App.jsx,src/utils.js "How should we refactor the tab system?"
 
-# 2-round deliberation before review + synthesis
-think_tank -r 2 "What's the right caching strategy here?"
+# Crux framing before collection
+think_tank --crux "What's the right caching strategy here?"
+
+# One deliberation round before review + synthesis
+think_tank -r 1 "What's the right caching strategy here?"
+
+# Adversarial critique from one model
+think_tank -R gpt "Where could this migration plan fail?"
 
 # Blind mode — hide model identities from yourself
 think_tank -b "Which database should we use for this workload?"
@@ -82,11 +91,11 @@ think_tank -b "Which database should we use for this workload?"
 # Use Claude as chairman instead of the default Grok
 think_tank -c claude "Compare these two architectures"
 
-# Skip review + synthesis — just get raw responses (original behavior)
+# Skip review + synthesis
 think_tank --no-chairman "Quick sanity check"
 
-# Deep mode with transcript saved
-think_tank -d -r 2 -s ~/transcripts/architecture.md "Long-term scaling plan?"
+# Deep mode with crux framing and transcript saved
+think_tank -d --crux -r 1 -s ~/transcripts/architecture.md "Long-term scaling plan?"
 
 # Interactive session
 think_tank -i "Let's design a new feature"
@@ -106,46 +115,25 @@ This repo now uses OpenRouter only. Set:
 
 Direct provider keys are no longer used by `think_tank.py`.
 
-## Optional MCP Server
-
-If you still want Claude Code integration, `mcp_server.py` wraps Think Tank as an MCP server.
-
-### Tools
-
-| Tool | What it does |
-|------|-------------|
-| `think_tank_light` | 4 models answer in parallel, no review/synthesis |
-| `think_tank_heavy` | Full pipeline: deliberation + review + chairman synthesis |
-
-Both accept a question, optional file paths, and an optional working directory for CLAUDE.md auto-detection.
-
-### Setup
-
-Register globally (all Claude Code sessions):
-
-```bash
-claude mcp add -s user think-tank -- python /path/to/think-tank/mcp_server.py
-```
-
-Requires the `mcp` pip package (`pip install mcp`).
-
 ## How It Works
 
-1. Auto-detects `CLAUDE.md` by walking up from current directory (like git)
-2. Sends your question + context to all models in parallel
-3. Displays responses as they arrive (color-coded per model in terminal)
-4. If `--rounds` > 1: feeds each model the others' responses for deliberation
-5. **Analysis**: Chairman extracts consensus points, disagreements, and unresolved gaps
-6. **Review**: Anonymizes all responses as Response A/B/C/D (randomly shuffled), each model evaluates and ranks them
-7. **Synthesis**: Chairman model takes all responses + analysis + rankings and produces the final answer
-8. If `--blind`: reveals model identity mapping at the very end
+1. Auto-detects `CLAUDE.md` by walking up from current directory unless `--no-context` is set.
+2. Loads explicit `--files` even when auto context is disabled.
+3. If `--crux` is set, extracts cruxes, assumptions, and validation tests before collection.
+4. Sends your question + context to all models in parallel.
+5. If `--rounds N` is set, runs N deliberation rounds after the first answer pass.
+6. **Analysis**: Chairman extracts consensus points, disagreements, unresolved gaps, and crux coverage.
+7. **Review**: Anonymizes all responses as Response A/B/C/D; each model reviews only the other responses.
+8. **Synthesis**: Chairman compiles the top-ranked response, dissent, analysis, and rankings into the final answer.
+9. If `--blind`: reveals model identity mapping at the very end.
 
 ## Tips
 
-- **`--rounds 1`** (default): Good for getting four independent perspectives fast
-- **`--rounds 2`**: The sweet spot — models correct each other, then get reviewed
-- **`--no-chairman`**: When you just want raw deliberation without the extra API calls
+- **Default**: Four independent perspectives, analysis, review, and synthesis.
+- **`--crux`**: Best first add-on for architecture or strategy decisions.
+- **`--rounds 1`**: One response-to-response pass before review.
+- **`--no-chairman`**: When you want responses plus structured analysis without review/synthesis
 - **`--blind`**: Forces you to evaluate responses without model bias before the reveal
-- **`--no-context`**: Your general-purpose mode for non-coding questions
+- **`--no-context`**: Skip CLAUDE.md/deep memory; use with `--files` when you want only explicit context
 - **`cd` into the repo first** — context auto-detection needs to find CLAUDE.md
 - The `--save` transcripts include everything: responses, reviews, rankings, and synthesis
