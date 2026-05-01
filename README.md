@@ -1,6 +1,6 @@
 # Think Tank
 
-CLI multi-model deliberation tool. Sends one prompt to Claude Opus 4.7, GPT-5.5, Gemini 3.1 Pro, and Grok 4.20 in parallel through OpenRouter. Optional crux framing, deliberation rounds, anonymized peer review, and chairman synthesis.
+CLI multi-model deliberation tool. Sends one prompt to Claude Opus 4.7, GPT-5.5, Gemini 3.1 Pro, and DeepSeek V4 Pro in parallel through OpenRouter. Optional crux framing, deliberation rounds, anonymized peer review, and Grok 4.20 chairman synthesis.
 
 ## Setup
 
@@ -30,11 +30,11 @@ Run from inside a repo directory to auto-include project context.
 
 ```
 Stage 0: CRUX        Optional framing pass (--crux)
-Stage 1: COLLECT      All models answer in parallel
+Stage 1: COLLECT      Default council answers in parallel
 Stage 2: DELIBERATE   Optional rounds where models challenge each other (--rounds)
 Stage 3: ANALYZE      Chairman extracts consensus, disagreements, unresolved gaps
 Stage 4: REVIEW       Leave-one-out anonymized peer ranking (Response A/B/C/D)
-Stage 5: SYNTHESIZE   Chairman compiles the final answer (default: Grok 4.20)
+Stage 5: SYNTHESIZE   Grok 4.20 chairman compiles the final answer
 ```
 
 Stages 4-5 run by default. Use `--no-chairman` to skip them (analysis still runs if 2+ models responded).
@@ -51,9 +51,9 @@ Stages 4-5 run by default. Use `--no-chairman` to skip them (analysis still runs
 | `--deep` | `-d` | — | Include MEMORY.md from .claude project memory |
 | `--rounds N` | `-r N` | number | Deliberation rounds after the initial answer pass (default: 0) |
 | `--files x,y` | `-f x,y` | paths | Include specific files as context |
-| `--save path` | `-s path` | filepath | Save full transcript to file |
+| `--save [path]` | `-s [path]` | optional filepath | Save full transcript. Bare filenames go under `output/`; omit path for a timestamped file. |
 | `--interactive` | `-i` | — | Open-ended mode with follow-up prompts |
-| `--models a,b` | `-m a,b` | names | Use specific models only (claude, gpt, gemini, grok) |
+| `--models a,b` | `-m a,b` | names | Use specific models only (claude, gpt, gemini, deepseek, grok) |
 | `--no-context` | — | — | Skip auto project context; explicit `--files` still load |
 | `--prompt-file` | `-pf` | filepath | Read question from a file instead of command line |
 | `--json` | — | — | Output structured JSON, suppress terminal display |
@@ -65,12 +65,13 @@ Stages 4-5 run by default. Use `--no-chairman` to skip them (analysis still runs
 | `claude` | Claude Opus 4.7 | Yes |
 | `gpt` | GPT-5.5 | Yes |
 | `gemini` | Gemini 3.1 Pro | Yes |
-| `grok` | Grok 4.20 | Yes (default chairman) |
+| `deepseek` | DeepSeek V4 Pro | Yes |
+| `grok` | Grok 4.20 | Yes (default chairman, not in the default panel) |
 
 ## Examples
 
 ```bash
-# Full pipeline — all 4 models, review, chairman synthesis
+# Full pipeline — default 4-model panel, review, Grok chairman synthesis
 think_tank "Should we split this into microservices?"
 
 # Include specific source files for a code question
@@ -95,7 +96,10 @@ think_tank -c claude "Compare these two architectures"
 think_tank --no-chairman "Quick sanity check"
 
 # Deep mode with crux framing and transcript saved
-think_tank -d --crux -r 1 -s ~/transcripts/architecture.md "Long-term scaling plan?"
+think_tank -d --crux -r 1 -s architecture.md "Long-term scaling plan?"
+
+# Save to an explicit directory instead of output/
+think_tank -s ~/transcripts/architecture.md "Long-term scaling plan?"
 
 # Interactive session
 think_tank -i "Let's design a new feature"
@@ -103,8 +107,8 @@ think_tank -i "Let's design a new feature"
 # General question (no project context)
 think_tank --no-context "Compare Redis vs Memcached for session storage"
 
-# Only ask Claude and GPT
-think_tank -m claude,gpt "Quick sanity check on this approach"
+# Only ask Claude and DeepSeek
+think_tank -m claude,deepseek "Quick sanity check on this approach"
 ```
 
 ## API Key

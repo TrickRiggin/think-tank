@@ -2,7 +2,7 @@
 
 ## What This Is
 
-CLI multi-model deliberation tool. Sends a prompt to 4 LLMs in parallel through OpenRouter, optional crux framing, deliberation rounds, anonymized peer review, and chairman synthesis. Single-file Python script, no web UI, no MCP wrapper, no framework dependencies beyond `requests`.
+CLI multi-model deliberation tool. Sends a prompt to the default 4-model council in parallel through OpenRouter, optional crux framing, deliberation rounds, anonymized peer review, and chairman synthesis. Single-file Python script, no web UI, no MCP wrapper, no framework dependencies beyond `requests`.
 
 ## Architecture
 
@@ -10,7 +10,7 @@ Everything lives in `think_tank.py`. The pipeline:
 
 ```
 Stage 0: CRUX        — Optional framing pass extracts cruxes/assumptions/tests (--crux)
-Stage 1: COLLECT      — All 4 models answer in parallel (ThreadPoolExecutor)
+Stage 1: COLLECT      — Default council answers in parallel (ThreadPoolExecutor)
 Stage 2: DELIBERATE   — Optional rounds where models challenge each other (--rounds)
 Stage 3: ANALYZE      — Chairman extracts consensus, disagreements, unresolved gaps, crux coverage
 Stage 4: REVIEW       — Leave-one-out anonymized peer ranking (Response A/B/C/D)
@@ -26,9 +26,12 @@ Stages 4-5 skip with `--no-chairman`. Stage 3 (analysis) still runs with `--no-c
 | `claude` | Claude Opus 4.7 | OpenRouter | `OPENROUTER_API_KEY` |
 | `gpt` | GPT-5.5 | OpenRouter | `OPENROUTER_API_KEY` |
 | `gemini` | Gemini 3.1 Pro | OpenRouter | `OPENROUTER_API_KEY` |
+| `deepseek` | DeepSeek V4 Pro | OpenRouter | `OPENROUTER_API_KEY` |
 | `grok` | Grok 4.20 | OpenRouter | `OPENROUTER_API_KEY` |
 
 All model calls go through `call_openrouter()`. The per-provider callers and per-provider keys were removed to keep configuration dead simple.
+
+Default council: `claude`, `gpt`, `gemini`, `deepseek`.
 
 ## Key Design Decisions
 
@@ -56,7 +59,7 @@ All model calls go through `call_openrouter()`. The per-provider callers and per
 - Default chairman is Grok (`--chairman` flag to change)
 - Chairman sees responses, analysis, and aggregate rankings using blind labels when `--blind` is active
 - Chairman prompt is compiler-style: start from the top-ranked response, preserve useful dissent, and explain material changes
-- Chairman can be a council member (default) or external
+- Chairman can be a council member or external. By default Grok is external to the council: it does not answer in Stage 1 unless explicitly included with `--models`.
 
 ### Blind Mode (--blind)
 - Models see anonymized names (Panelist A/B/C/D/etc.) in display, deliberation, analysis, and synthesis
@@ -93,7 +96,7 @@ All model calls go through `call_openrouter()`. The per-provider callers and per
 ```json
 {
   "question": "...",
-  "models": ["claude", "gpt", "gemini", "grok"],
+  "models": ["claude", "gpt", "gemini", "deepseek"],
   "deliberation_rounds": 1,
   "crux": "CRUXES:\n- ...",
   "rounds": [{"round": 1, "responses": {"claude": {"text": "...", "elapsed": 12.3}, ...}}],
@@ -127,13 +130,15 @@ think_tank "Your question"                    # full pipeline, 4 models
 think_tank --crux "Decision question"         # add crux framing
 think_tank --no-context "General question"    # no auto project context
 think_tank --no-chairman "Quick opinions"     # skip review + synthesis, still runs analysis
-think_tank -r 1 -b -s out.md "Design Q"      # 1 deliberation round, blind, save transcript
+think_tank -r 1 -b -s out.md "Design Q"       # saves transcript to output/out.md
+think_tank "Design Q" -s                      # saves timestamped transcript under output/
 ```
 
 ## Development Notes
 
 - Inspired by karpathy/llm-council but stays CLI-first and project-aware
 - The user's original workflow was: run Think Tank, save transcript, manually feed to Claude for synthesis. v2 automates that last step.
+- `--save` keeps routine transcripts in ignored `output/` by default; explicit directories still work for intentional exports.
 - No tests — this is a personal tool, vibe-coded. Verify manually.
 - `requests` is the only runtime dependency for the CLI (plus stdlib + `random` for shuffling)
 

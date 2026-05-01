@@ -11,7 +11,7 @@ There is no build system here; run scripts directly with Python.
 - `python think_tank.py "Your question"` runs the default multi-model pipeline.
 - `python think_tank.py --crux "Decision question"` verifies the crux-framing path.
 - `python think_tank.py --no-chairman --json "Quick smoke test"` verifies light mode and JSON output.
-- `python think_tank.py --save out.md "Prompt"` saves a full transcript for review.
+- `python think_tank.py --save out.md "Prompt"` saves a full transcript to `output/out.md` for review.
 
 ## Coding Style & Naming Conventions
 Use Python 3.10+ style, 4-space indentation, and `snake_case` for functions and variables. Match the existing style in `think_tank.py`: explicit control flow, small helpers, and minimal abstraction. Prefer stdlib plus `requests`; do not add frameworks or packaging overhead unless the payoff is clear. For new docs in `docs/superpowers/`, use the existing date-first naming pattern.

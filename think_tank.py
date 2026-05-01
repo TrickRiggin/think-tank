@@ -73,6 +73,7 @@ C = {
     "claude": "\033[38;5;208m",   # amber/orange
     "gpt":    "\033[38;5;114m",   # green
     "gemini": "\033[38;5;75m",    # blue
+    "deepseek": "\033[38;5;45m",   # cyan
     "grok":   "\033[38;5;205m",   # magenta
     "system": "\033[38;5;245m",   # gray
     "bold":   "\033[1m",
@@ -96,11 +97,30 @@ MODELS = {
         "name":     "Gemini 3.1 Pro",
         "model_id": "google/gemini-3.1-pro-preview",
     },
+    "deepseek": {
+        "name":     "DeepSeek V4 Pro",
+        "model_id": "deepseek/deepseek-v4-pro",
+    },
     "grok": {
         "name":     "Grok 4.20",
         "model_id": "x-ai/grok-4.20",
     },
 }
+
+DEFAULT_PANEL = ["claude", "gpt", "gemini", "deepseek"]
+DEFAULT_OUTPUT_DIR = Path("output")
+
+
+def resolve_save_path(save_arg):
+    """Resolve --save paths. Bare filenames land in output/ by default."""
+    if save_arg == "":
+        return DEFAULT_OUTPUT_DIR / f"think_tank-{datetime.now().strftime('%Y-%m-%d-%H%M%S')}.md"
+
+    save_path = Path(save_arg).expanduser()
+    if not save_path.is_absolute() and save_path.parent == Path("."):
+        return DEFAULT_OUTPUT_DIR / save_path
+
+    return save_path
 
 # ── API callers ──────────────────────────────────────────────────────────────
 
@@ -967,10 +987,11 @@ def main():
     parser.add_argument("--rounds", "-r", type=int, default=0,
                         help="Deliberation rounds after the initial answer pass (default: 0)")
     parser.add_argument("--interactive", "-i", action="store_true", help="Interactive follow-up mode")
-    parser.add_argument("--save", "-s", help="Save transcript to file")
+    parser.add_argument("--save", "-s", nargs="?", const="", metavar="PATH",
+                        help="Save transcript. Bare filenames go to output/; omit PATH for a timestamped file.")
     parser.add_argument("--no-context", action="store_true",
                         help="Skip auto project context (CLAUDE.md/deep memory); explicit --files still load")
-    parser.add_argument("--models", "-m", help="Comma-separated model keys (claude,gpt,gemini,grok)")
+    parser.add_argument("--models", "-m", help="Comma-separated model keys (claude,gpt,gemini,deepseek,grok)")
     parser.add_argument("--chairman", "-c", default="grok",
                         help="Model key for chairman synthesis (default: grok)")
     parser.add_argument("--blind", "-b", action="store_true",
@@ -1014,10 +1035,10 @@ def main():
         active_models = [k.strip() for k in args.models.split(",")]
         invalid = [k for k in active_models if k not in MODELS]
         if invalid:
-            print(f"{C['err']}Unknown models: {', '.join(invalid)}. Use: claude, gpt, gemini, grok{C['reset']}")
+            print(f"{C['err']}Unknown models: {', '.join(invalid)}. Use: {', '.join(MODELS.keys())}{C['reset']}")
             sys.exit(1)
     else:
-        active_models = list(MODELS.keys())
+        active_models = DEFAULT_PANEL[:]
 
     # Validate chairman
     if args.chairman not in MODELS:
@@ -1293,8 +1314,9 @@ def main():
             transcript.append(f"- {panelist_name} → {MODELS[key]['name']}\n")
 
     # ── Save transcript ──────────────────────────────────────────────────
-    if args.save:
-        save_path = Path(args.save)
+    if args.save is not None:
+        save_path = resolve_save_path(args.save)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
         save_path.write_text("\n".join(transcript), encoding="utf-8")
         _print(f"\n{C['system']}Transcript saved to {save_path}{C['reset']}")
 
