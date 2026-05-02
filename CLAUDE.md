@@ -2,7 +2,7 @@
 
 ## What This Is
 
-CLI multi-model deliberation tool. Sends a prompt to the default 4-model council in parallel through OpenRouter, optional crux framing, deliberation rounds, anonymized peer review, and chairman synthesis. Single-file Python script, no web UI, no MCP wrapper, no framework dependencies beyond `requests`.
+CLI multi-model deliberation tool. Sends a prompt to the default 4-model council in parallel through OpenRouter, optional crux framing, deliberation rounds, anonymized peer review, and chairman synthesis. Single-file Python script, no web UI, no MCP wrapper, no framework dependencies beyond `requests`. Runs save markdown and HTML artifacts by default so expensive council calls leave a durable report.
 
 ## Architecture
 
@@ -15,6 +15,7 @@ Stage 2: DELIBERATE   — Optional rounds where models challenge each other (--r
 Stage 3: ANALYZE      — Chairman extracts consensus, disagreements, unresolved gaps, crux coverage
 Stage 4: REVIEW       — Leave-one-out anonymized peer ranking (Response A/B/C/D)
 Stage 5: SYNTHESIZE   — Chairman compiles a final answer from analysis + rankings
+Stage 6: SAVE          — Markdown transcript + standalone HTML report, unless --no-save
 ```
 
 Stages 4-5 skip with `--no-chairman`. Stage 3 (analysis) still runs with `--no-chairman` if 2+ models responded. `--no-context` skips auto project context (`CLAUDE.md` / deep memory) but still loads explicit `--files`.
@@ -92,7 +93,7 @@ Default council: `claude`, `gpt`, `gemini`, `deepseek`.
 
 ## JSON Output
 
-`--json` suppresses all terminal output and emits structured JSON to stdout:
+`--json` suppresses terminal display and emits structured JSON to stdout. Default artifact saves still happen unless `--no-save` is set; saved paths appear under `artifacts` in the JSON:
 ```json
 {
   "question": "...",
@@ -103,6 +104,7 @@ Default council: `claude`, `gpt`, `gemini`, `deepseek`.
   "analysis": "CONSENSUS:\n- ...\n\nDISAGREEMENTS:\n- ...\n\nUNRESOLVED:\n- ...",
   "review": {"rankings": [...], "label_map": {...}},
   "synthesis": "Chairman's final answer...",
+  "artifacts": {"markdown": "output/think_tank-...", "html": "output/think_tank-..."},
   "total_elapsed": 45.2
 }
 ```
@@ -130,15 +132,17 @@ think_tank "Your question"                    # full pipeline, 4 models
 think_tank --crux "Decision question"         # add crux framing
 think_tank --no-context "General question"    # no auto project context
 think_tank --no-chairman "Quick opinions"     # skip review + synthesis, still runs analysis
-think_tank -r 1 -b -s out.md "Design Q"       # saves transcript to output/out.md
-think_tank "Design Q" -s                      # saves timestamped transcript under output/
+think_tank -r 1 -b -s out.md "Design Q"       # saves output/out.md + output/out.html
+think_tank "Design Q"                         # saves timestamped markdown + HTML under output/
+think_tank --no-save "Disposable check"       # skip artifact writes
 ```
 
 ## Development Notes
 
 - Inspired by karpathy/llm-council but stays CLI-first and project-aware
 - The user's original workflow was: run Think Tank, save transcript, manually feed to Claude for synthesis. v2 automates that last step.
-- `--save` keeps routine transcripts in ignored `output/` by default; explicit directories still work for intentional exports.
+- Routine runs save markdown and HTML into ignored `output/` by default. `--save` chooses the basename; explicit directories still work for intentional exports. `--no-save` is the throwaway-run escape hatch.
+- `build_html_transcript()` is intentionally stdlib-only. It renders the repo's transcript Markdown subset, promotes chairman synthesis/executive summary to the top, and collapses source material below.
 - No tests — this is a personal tool, vibe-coded. Verify manually.
 - `requests` is the only runtime dependency for the CLI (plus stdlib + `random` for shuffling)
 

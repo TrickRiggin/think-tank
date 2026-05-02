@@ -11,6 +11,7 @@ Usage:
 """
 
 import argparse
+import html
 import json
 import os
 import random
@@ -113,14 +114,447 @@ DEFAULT_OUTPUT_DIR = Path("output")
 
 def resolve_save_path(save_arg):
     """Resolve --save paths. Bare filenames land in output/ by default."""
-    if save_arg == "":
+    if save_arg in (None, ""):
         return DEFAULT_OUTPUT_DIR / f"think_tank-{datetime.now().strftime('%Y-%m-%d-%H%M%S')}.md"
 
     save_path = Path(save_arg).expanduser()
     if not save_path.is_absolute() and save_path.parent == Path("."):
-        return DEFAULT_OUTPUT_DIR / save_path
+        save_path = DEFAULT_OUTPUT_DIR / save_path
 
+    if save_path.suffix.lower() == ".html":
+        return save_path.with_suffix(".md")
+    if not save_path.suffix:
+        return save_path.with_suffix(".md")
     return save_path
+
+
+def resolve_artifact_paths(save_arg):
+    """Return markdown + HTML paths for a transcript save target."""
+    md_path = resolve_save_path(save_arg)
+    return md_path, md_path.with_suffix(".html")
+
+
+def html_id(text):
+    """Stable-ish anchor id for generated headings."""
+    text = re.sub(r"<[^>]+>", "", text)
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return slug or "section"
+
+
+def inline_markdown_to_html(text):
+    """Render small inline Markdown subset without adding dependencies."""
+    text = html.escape(text)
+    code_spans = []
+
+    def stash_code(match):
+        code_spans.append(f"<code>{match.group(1)}</code>")
+        return f"@@CODE{len(code_spans) - 1}@@"
+
+    text = re.sub(r"`([^`]+)`", stash_code, text)
+    text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
+    text = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<em>\1</em>", text)
+    for idx, value in enumerate(code_spans):
+        text = text.replace(f"@@CODE{idx}@@", value)
+    return text
+
+
+def markdown_to_html(markdown_text, heading_offset=1):
+    """Render the transcript's Markdown subset into standalone HTML."""
+    lines = markdown_text.strip("\n").splitlines()
+    output = []
+    paragraph = []
+    list_tag = None
+    in_code = False
+    code_lines = []
+
+    def flush_paragraph():
+        nonlocal paragraph
+        if paragraph:
+            text = " ".join(part.strip() for part in paragraph).strip()
+            if text:
+                output.append(f"<p>{inline_markdown_to_html(text)}</p>")
+            paragraph = []
+
+    def close_list():
+        nonlocal list_tag
+        if list_tag:
+            output.append(f"</{list_tag}>")
+            list_tag = None
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+
+        if line.strip().startswith("```"):
+            if in_code:
+                output.append("<pre><code>" + html.escape("\n".join(code_lines)) + "</code></pre>")
+                code_lines = []
+                in_code = False
+            else:
+                flush_paragraph()
+                close_list()
+                in_code = True
+            continue
+
+        if in_code:
+            code_lines.append(line)
+            continue
+
+        if not line.strip():
+            flush_paragraph()
+            close_list()
+            continue
+
+        heading = re.match(r"^(#{1,4})\s+(.*)$", line)
+        if heading:
+            flush_paragraph()
+            close_list()
+            level = min(len(heading.group(1)) + heading_offset, 6)
+            title = heading.group(2).strip()
+            output.append(
+                f'<h{level} id="{html_id(title)}">{inline_markdown_to_html(title)}</h{level}>'
+            )
+            continue
+
+        if line.startswith(">"):
+            flush_paragraph()
+            close_list()
+            output.append(f"<blockquote>{inline_markdown_to_html(line.lstrip('> ').strip())}</blockquote>")
+            continue
+
+        bullet = re.match(r"^\s*[-*]\s+(.*)$", line)
+        if bullet:
+            flush_paragraph()
+            if list_tag != "ul":
+                close_list()
+                output.append("<ul>")
+                list_tag = "ul"
+            output.append(f"<li>{inline_markdown_to_html(bullet.group(1).strip())}</li>")
+            continue
+
+        numbered = re.match(r"^\s*\d+[.)]\s+(.*)$", line)
+        if numbered:
+            flush_paragraph()
+            if list_tag != "ol":
+                close_list()
+                output.append("<ol>")
+                list_tag = "ol"
+            output.append(f"<li>{inline_markdown_to_html(numbered.group(1).strip())}</li>")
+            continue
+
+        if list_tag and line.startswith("   "):
+            output.append(f'<p class="list-note">{inline_markdown_to_html(line.strip())}</p>')
+            continue
+
+        close_list()
+        paragraph.append(line)
+
+    flush_paragraph()
+    close_list()
+    if in_code:
+        output.append("<pre><code>" + html.escape("\n".join(code_lines)) + "</code></pre>")
+    return "\n".join(output)
+
+
+def extract_between(text, start_marker, end_marker=None):
+    start = text.find(start_marker)
+    if start == -1:
+        return ""
+    if end_marker is None:
+        return text[start:].strip()
+    end = text.find(end_marker, start + len(start_marker))
+    if end == -1:
+        return text[start:].strip()
+    return text[start:end].strip()
+
+
+TRANSCRIPT_HEADING_RE = re.compile(
+    r"^## (Crux Frame|Round \d+|Analysis(?: \(Structured Disagreement\))?|"
+    r"Review \(Anonymized Peer Ranking\)|Chairman Synthesis|Reveal)\s*$",
+    re.MULTILINE,
+)
+
+
+def next_transcript_heading_start(text, start):
+    """Find the next Think Tank section heading, ignoring headings inside model prose."""
+    match = TRANSCRIPT_HEADING_RE.search(text, start)
+    return match.start() if match else len(text)
+
+
+def extract_section(text, heading):
+    pattern = re.compile(rf"^## {re.escape(heading)}\s*$", re.MULTILINE)
+    match = pattern.search(text)
+    if not match:
+        return ""
+    end = next_transcript_heading_start(text, match.end())
+    return text[match.start():end].strip()
+
+
+def extract_title(text):
+    match = re.search(r"^#\s+(.+)$", text, re.MULTILINE)
+    return match.group(1).strip() if match else "Think Tank Transcript"
+
+
+def extract_question(text):
+    question = extract_between(text, "**Question:**", "**Models:**")
+    return question.strip() or "No question captured."
+
+
+def extract_models(text):
+    match = re.search(r"^\*\*Models:\*\*\s*(.+)$", text, re.MULTILINE)
+    return match.group(1).strip() if match else "Unknown models"
+
+
+def extract_executive_summary(markdown_text):
+    headings = list(re.finditer(r"^#{2,4}\s+.*Executive Summary.*$", markdown_text, re.MULTILINE | re.IGNORECASE))
+    if not headings:
+        return ""
+    last = headings[-1]
+    next_heading = re.search(r"^#{1,4}\s+", markdown_text[last.end():], re.MULTILINE)
+    if next_heading:
+        return markdown_text[last.start():last.end() + next_heading.start()].strip()
+    return markdown_text[last.start():].strip()
+
+
+def build_html_transcript(transcript_markdown):
+    """Build an easy-to-read standalone HTML report from a markdown transcript."""
+    title = extract_title(transcript_markdown)
+    models = extract_models(transcript_markdown)
+    question = extract_question(transcript_markdown)
+    crux = extract_section(transcript_markdown, "Crux Frame")
+    analysis = extract_section(transcript_markdown, "Analysis (Structured Disagreement)") or extract_section(transcript_markdown, "Analysis")
+    review = extract_section(transcript_markdown, "Review (Anonymized Peer Ranking)")
+    synthesis = extract_section(transcript_markdown, "Chairman Synthesis")
+    reveal = extract_section(transcript_markdown, "Reveal")
+
+    if synthesis:
+        lead_label = "Chairman Synthesis"
+        lead = synthesis
+        lead_blurb = "The council's compiled recommendation with dissent handled."
+    elif analysis:
+        lead_label = "Structured Analysis"
+        lead = analysis
+        lead_blurb = "Consensus, disagreements, and unresolved questions from the council."
+    else:
+        lead_label = "Transcript"
+        lead = transcript_markdown
+        lead_blurb = "The saved answer from this lightweight run."
+
+    executive_summary = extract_executive_summary(lead)
+    lead_without_summary = lead.replace(executive_summary, "").strip() if executive_summary else lead
+    executive_summary_html = (
+        markdown_to_html(re.sub(r"^#{2,4}\s+.*Executive Summary.*\n?", "", executive_summary).strip(), heading_offset=1)
+        if executive_summary else
+        "<p>No executive summary heading was found in the final answer. Start with the main synthesis below.</p>"
+    )
+
+    def details(title_text, body, open_by_default=False):
+        if not body:
+            return ""
+        open_attr = " open" if open_by_default else ""
+        word_count = len(body.split())
+        return (
+            f'<details class="source-block"{open_attr}>'
+            f'<summary><span>{html.escape(title_text)}</span><small>{word_count} words</small></summary>'
+            f'<div class="source-content markdown">{markdown_to_html(body, heading_offset=2)}</div>'
+            "</details>"
+        )
+
+    round_sections = []
+    for match in re.finditer(r"^## Round \d+\s*$", transcript_markdown, re.MULTILINE):
+        end = next_transcript_heading_start(transcript_markdown, match.end())
+        body = transcript_markdown[match.start():end].strip()
+        round_sections.append(body)
+
+    source_sections = [
+        details("Original Prompt", question),
+        details("Crux Frame", crux),
+    ]
+    for index, body in enumerate(round_sections, 1):
+        title_text = "Initial Answers" if index == 1 else f"Deliberation Round {index - 1}"
+        source_sections.append(details(title_text, body))
+    source_sections.extend([
+        details("Structured Analysis", analysis),
+        details("Peer Reviews and Rankings", review),
+        details("Blind Reveal", reveal),
+        details("Full Markdown Transcript", transcript_markdown),
+    ])
+
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{html.escape(title)} HTML Report</title>
+<style>
+:root {{
+  --ink: #161a1d;
+  --muted: #59636e;
+  --paper: #fbfbf7;
+  --panel: #ffffff;
+  --line: #d9ded8;
+  --red: #b42318;
+  --red-bg: #fff0ed;
+  --green: #176b4d;
+  --green-bg: #edf8f3;
+  --blue: #1f5d8c;
+  --blue-bg: #edf5fb;
+  --gold: #8a6116;
+  --gold-bg: #fff7df;
+  --shadow: 0 18px 60px rgba(18, 24, 31, .10);
+}}
+* {{ box-sizing: border-box; }}
+html {{ scroll-behavior: smooth; }}
+body {{
+  margin: 0;
+  color: var(--ink);
+  background: linear-gradient(180deg, #f3f6f3 0, var(--paper) 28rem);
+  font-family: Aptos, Candara, "Segoe UI", sans-serif;
+  line-height: 1.56;
+}}
+.shell {{ max-width: 1180px; margin: 0 auto; padding: 34px 24px 80px; }}
+.hero {{
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, .65fr);
+  gap: 28px;
+  align-items: stretch;
+  padding: 34px;
+  border: 1px solid var(--line);
+  background: rgba(255,255,255,.84);
+  box-shadow: var(--shadow);
+}}
+.kicker {{ margin: 0 0 12px; text-transform: uppercase; letter-spacing: .12em; font-size: .76rem; color: var(--blue); font-weight: 800; }}
+h1 {{ font-family: Cambria, Georgia, serif; font-size: clamp(2.25rem, 4vw, 4.75rem); line-height: .96; margin: 0 0 18px; font-weight: 700; letter-spacing: 0; }}
+.hero p {{ font-size: 1.08rem; max-width: 74ch; }}
+.meta {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }}
+.badge {{ display: inline-flex; padding: 7px 10px; border: 1px solid var(--line); background: #fff; font-size: .84rem; font-weight: 700; }}
+.verdict {{ border-left: 8px solid var(--red); background: var(--red-bg); padding: 22px; display: flex; flex-direction: column; justify-content: space-between; }}
+.verdict strong {{ display: block; font-size: 1.15rem; margin-bottom: 8px; }}
+.verdict p {{ margin: 0; font-size: .98rem; }}
+.takeaways {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 24px 0 0; }}
+.takeaway {{ border: 1px solid var(--line); background: var(--panel); padding: 16px; min-height: 136px; }}
+.takeaway b {{ display: block; font-size: .82rem; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); margin-bottom: 8px; }}
+.takeaway strong {{ display: block; font-size: 1.07rem; line-height: 1.25; margin-bottom: 8px; }}
+.takeaway p {{ margin: 0; color: var(--muted); font-size: .94rem; }}
+.risk {{ border-top: 5px solid var(--red); }}
+.policy {{ border-top: 5px solid var(--blue); }}
+.pipeline {{ border-top: 5px solid var(--green); }}
+.test {{ border-top: 5px solid var(--gold); }}
+.grid {{ display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 28px; margin-top: 28px; align-items: start; }}
+nav {{ position: sticky; top: 18px; border: 1px solid var(--line); background: rgba(255,255,255,.92); padding: 18px; }}
+nav h2 {{ margin: 0 0 10px; font-size: .9rem; text-transform: uppercase; letter-spacing: .11em; color: var(--muted); }}
+nav a {{ display: block; text-decoration: none; padding: 8px 0; border-top: 1px solid #eef1ed; color: var(--ink); font-weight: 700; font-size: .94rem; }}
+main {{ min-width: 0; }}
+section {{ margin-bottom: 28px; }}
+.section-title {{ display: flex; align-items: end; justify-content: space-between; gap: 16px; margin: 0 0 14px; }}
+.section-title h2 {{ margin: 0; font-family: Cambria, Georgia, serif; font-size: 2rem; line-height: 1.1; }}
+.section-title span {{ color: var(--muted); font-size: .92rem; }}
+.memo, .content-block {{ background: var(--panel); border: 1px solid var(--line); padding: 28px; box-shadow: 0 8px 28px rgba(18,24,31,.05); }}
+.memo {{ border-top: 6px solid var(--green); }}
+.content-block {{ border-top: 6px solid var(--blue); }}
+.callout {{ border: 1px solid #ead2cd; background: var(--red-bg); padding: 18px 20px; margin: 20px 0; }}
+.callout strong {{ color: var(--red); }}
+.markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 {{ font-family: Cambria, Georgia, serif; line-height: 1.18; margin: 1.55em 0 .55em; }}
+.markdown h2:first-child, .markdown h3:first-child {{ margin-top: 0; }}
+.markdown h2 {{ font-size: 1.75rem; }}
+.markdown h3 {{ font-size: 1.42rem; }}
+.markdown h4 {{ font-size: 1.18rem; }}
+.markdown p {{ margin: .78em 0; }}
+.markdown ul, .markdown ol {{ padding-left: 1.35rem; }}
+.markdown li {{ margin: .42em 0; }}
+.markdown blockquote {{ margin: 1rem 0; padding: .8rem 1rem; border-left: 5px solid var(--blue); background: var(--blue-bg); }}
+.list-note {{ margin-left: 1.2rem !important; color: var(--muted); }}
+.source-block {{ border: 1px solid var(--line); background: var(--panel); margin-bottom: 12px; }}
+.source-block summary {{ cursor: pointer; list-style: none; padding: 16px 18px; display: flex; justify-content: space-between; gap: 14px; align-items: center; font-weight: 800; }}
+.source-block summary::-webkit-details-marker {{ display: none; }}
+.source-block summary span::before {{ content: '+'; display: inline-grid; place-items: center; width: 22px; height: 22px; margin-right: 10px; border: 1px solid var(--line); color: var(--blue); }}
+.source-block[open] summary span::before {{ content: '-'; }}
+.source-block summary small {{ color: var(--muted); font-weight: 700; white-space: nowrap; }}
+.source-content {{ border-top: 1px solid var(--line); padding: 22px; max-height: 72vh; overflow: auto; }}
+.footer {{ color: var(--muted); font-size: .88rem; margin-top: 28px; }}
+@media (max-width: 980px) {{
+  .hero {{ grid-template-columns: 1fr; padding: 24px; }}
+  .grid {{ grid-template-columns: 1fr; }}
+  nav {{ position: static; }}
+  .takeaways {{ grid-template-columns: repeat(2, 1fr); }}
+}}
+@media (max-width: 640px) {{
+  .shell {{ padding: 18px 14px 50px; }}
+  h1 {{ font-size: 2.35rem; }}
+  .takeaways {{ grid-template-columns: 1fr; }}
+  .memo, .content-block {{ padding: 20px; }}
+  .section-title {{ display: block; }}
+}}
+@media print {{
+  body {{ background: white; }}
+  .shell {{ max-width: none; padding: 0; }}
+  nav, .source-block {{ display: none; }}
+  .grid, .hero, .takeaways {{ display: block; }}
+  .hero, .memo, .content-block, .takeaway {{ box-shadow: none; break-inside: avoid; }}
+}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="hero">
+    <div>
+      <p class="kicker">Think Tank report · {html.escape(created_at)}</p>
+      <h1>{html.escape(title)}</h1>
+      <p>This HTML version promotes the final synthesis when available, keeps the executive answer scannable, and preserves the raw council material underneath.</p>
+      <div class="meta">
+        <span class="badge">{html.escape(models)}</span>
+        <span class="badge">{html.escape(lead_label)} on top</span>
+      </div>
+    </div>
+    <aside class="verdict">
+      <div>
+        <strong>Artifact pair saved</strong>
+        <p>Markdown keeps the raw transcript portable. HTML makes the answer readable enough to hand to another human without apology.</p>
+      </div>
+    </aside>
+  </header>
+
+  <div class="takeaways" id="fast-read">
+    <article class="takeaway risk"><b>Read first</b><strong>Executive summary</strong><p>The shortest useful version of the final answer.</p></article>
+    <article class="takeaway policy"><b>Then</b><strong>{html.escape(lead_label)}</strong><p>{html.escape(lead_blurb)}</p></article>
+    <article class="takeaway pipeline"><b>Trace</b><strong>Crux and analysis</strong><p>See what mattered, what was unresolved, and where the models agreed.</p></article>
+    <article class="takeaway test"><b>Archive</b><strong>Full transcript</strong><p>All answers, reviews, rankings, and reveal data are preserved below.</p></article>
+  </div>
+
+  <div class="grid">
+    <nav aria-label="Document sections">
+      <h2>Jump To</h2>
+      <a href="#executive-summary">Executive Summary</a>
+      <a href="#lead-synthesis">{html.escape(lead_label)}</a>
+      <a href="#source-material">Source Material</a>
+    </nav>
+
+    <main>
+      <section id="executive-summary">
+        <div class="section-title"><h2>Executive Summary</h2><span>Promoted from the final answer when available</span></div>
+        <div class="memo markdown">{executive_summary_html}</div>
+      </section>
+
+      <section id="lead-synthesis">
+        <div class="section-title"><h2>{html.escape(lead_label)}</h2><span>Primary answer</span></div>
+        <div class="content-block markdown">
+          <div class="callout"><strong>Shortcut:</strong> Start here when you need the decision-quality answer. Open source material only when you want the receipts.</div>
+          {markdown_to_html(lead_without_summary, heading_offset=1)}
+        </div>
+      </section>
+
+      <section id="source-material">
+        <div class="section-title"><h2>Source Material</h2><span>Collapsed by default</span></div>
+        {''.join(source_sections)}
+      </section>
+
+      <p class="footer">Generated by Think Tank on {html.escape(created_at)}. This is a static, standalone HTML companion to the markdown transcript.</p>
+    </main>
+  </div>
+</div>
+</body>
+</html>
+"""
 
 # ── API callers ──────────────────────────────────────────────────────────────
 
@@ -978,7 +1412,8 @@ def main():
         epilog="Examples:\n"
                '  think_tank "How should we refactor the auth module?"\n'
                '  think_tank --files src/App.jsx --crux --rounds 1 "Split this component?"\n'
-               '  think_tank --deep --interactive "2027 strategy discussion"',
+               '  think_tank --deep --interactive "2027 strategy discussion"\n'
+               '  think_tank --no-save "Quick throwaway check"',
     )
     parser.add_argument("question", nargs="?", help="Your question (or use --prompt-file)")
     parser.add_argument("--prompt-file", "-pf", help="Read question from file")
@@ -988,7 +1423,10 @@ def main():
                         help="Deliberation rounds after the initial answer pass (default: 0)")
     parser.add_argument("--interactive", "-i", action="store_true", help="Interactive follow-up mode")
     parser.add_argument("--save", "-s", nargs="?", const="", metavar="PATH",
-                        help="Save transcript. Bare filenames go to output/; omit PATH for a timestamped file.")
+                        help="Save markdown + HTML artifacts to this base path (enabled by default). "
+                             "Bare filenames go to output/; omit PATH for a timestamped file.")
+    parser.add_argument("--no-save", action="store_true",
+                        help="Do not save markdown/HTML artifacts for this run")
     parser.add_argument("--no-context", action="store_true",
                         help="Skip auto project context (CLAUDE.md/deep memory); explicit --files still load")
     parser.add_argument("--models", "-m", help="Comma-separated model keys (claude,gpt,gemini,deepseek,grok)")
@@ -1313,12 +1751,18 @@ def main():
         for key, panelist_name in blind_map.items():
             transcript.append(f"- {panelist_name} → {MODELS[key]['name']}\n")
 
-    # ── Save transcript ──────────────────────────────────────────────────
-    if args.save is not None:
-        save_path = resolve_save_path(args.save)
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        save_path.write_text("\n".join(transcript), encoding="utf-8")
-        _print(f"\n{C['system']}Transcript saved to {save_path}{C['reset']}")
+    # ── Save artifacts ───────────────────────────────────────────────────
+    artifact_paths = None
+    if not args.no_save:
+        markdown_path, html_path = resolve_artifact_paths(args.save)
+        transcript_markdown = "\n".join(transcript)
+        markdown_path.parent.mkdir(parents=True, exist_ok=True)
+        html_path.parent.mkdir(parents=True, exist_ok=True)
+        markdown_path.write_text(transcript_markdown, encoding="utf-8")
+        html_path.write_text(build_html_transcript(transcript_markdown), encoding="utf-8")
+        artifact_paths = {"markdown": str(markdown_path), "html": str(html_path)}
+        _print(f"\n{C['system']}Transcript saved to {markdown_path}{C['reset']}")
+        _print(f"{C['system']}HTML report saved to {html_path}{C['reset']}")
 
     # ── JSON output ─────────────────────────────────────────────────────
     if JSON_MODE:
@@ -1338,6 +1782,8 @@ def main():
             json_output["review"] = json_review
         if not args.no_chairman and json_synthesis:
             json_output["synthesis"] = json_synthesis
+        if artifact_paths:
+            json_output["artifacts"] = artifact_paths
         json_output["total_elapsed"] = round(time.time() - pipeline_start, 1)
         print(json.dumps(json_output, ensure_ascii=False))
     else:

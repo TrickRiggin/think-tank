@@ -1,6 +1,6 @@
 # Think Tank
 
-CLI multi-model deliberation tool. Sends one prompt to Claude Opus 4.7, GPT-5.5, Gemini 3.1 Pro, and DeepSeek V4 Pro in parallel through OpenRouter. Optional crux framing, deliberation rounds, anonymized peer review, and Grok 4.20 chairman synthesis.
+CLI multi-model deliberation tool. Sends one prompt to Claude Opus 4.7, GPT-5.5, Gemini 3.1 Pro, and DeepSeek V4 Pro in parallel through OpenRouter. Optional crux framing, deliberation rounds, anonymized peer review, and Grok 4.20 chairman synthesis. Every run saves a markdown transcript and a polished HTML report by default.
 
 ## Setup
 
@@ -51,7 +51,8 @@ Stages 4-5 run by default. Use `--no-chairman` to skip them (analysis still runs
 | `--deep` | `-d` | — | Include MEMORY.md from .claude project memory |
 | `--rounds N` | `-r N` | number | Deliberation rounds after the initial answer pass (default: 0) |
 | `--files x,y` | `-f x,y` | paths | Include specific files as context |
-| `--save [path]` | `-s [path]` | optional filepath | Save full transcript. Bare filenames go under `output/`; omit path for a timestamped file. |
+| `--save [path]` | `-s [path]` | optional filepath | Choose the markdown/HTML artifact basename. Bare filenames go under `output/`; omit path for a timestamped file. |
+| `--no-save` | | — | Skip markdown/HTML artifact writes for a throwaway run. |
 | `--interactive` | `-i` | — | Open-ended mode with follow-up prompts |
 | `--models a,b` | `-m a,b` | names | Use specific models only (claude, gpt, gemini, deepseek, grok) |
 | `--no-context` | — | — | Skip auto project context; explicit `--files` still load |
@@ -101,6 +102,9 @@ think_tank -d --crux -r 1 -s architecture.md "Long-term scaling plan?"
 # Save to an explicit directory instead of output/
 think_tank -s ~/transcripts/architecture.md "Long-term scaling plan?"
 
+# Throwaway run with no markdown/HTML souvenirs
+think_tank --no-save "Quick gut check?"
+
 # Interactive session
 think_tank -i "Let's design a new feature"
 
@@ -129,7 +133,8 @@ Direct provider keys are no longer used by `think_tank.py`.
 6. **Analysis**: Chairman extracts consensus points, disagreements, unresolved gaps, and crux coverage.
 7. **Review**: Anonymizes all responses as Response A/B/C/D; each model reviews only the other responses.
 8. **Synthesis**: Chairman compiles the top-ranked response, dissent, analysis, and rankings into the final answer.
-9. If `--blind`: reveals model identity mapping at the very end.
+9. Saves a markdown transcript plus a standalone HTML report with the synthesis promoted to the top.
+10. If `--blind`: reveals model identity mapping at the very end.
 
 ## Tips
 
@@ -140,4 +145,5 @@ Direct provider keys are no longer used by `think_tank.py`.
 - **`--blind`**: Forces you to evaluate responses without model bias before the reveal
 - **`--no-context`**: Skip CLAUDE.md/deep memory; use with `--files` when you want only explicit context
 - **`cd` into the repo first** — context auto-detection needs to find CLAUDE.md
-- The `--save` transcripts include everything: responses, reviews, rankings, and synthesis
+- Markdown and HTML artifacts save by default under `output/`; use `--save name.md` to choose the basename or `--no-save` for a disposable run.
+- The saved artifacts include everything: responses, reviews, rankings, and synthesis. The HTML report promotes the executive summary/final synthesis first and collapses the source material below.
