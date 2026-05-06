@@ -259,12 +259,13 @@ def extract_between(text, start_marker, end_marker=None):
     start = text.find(start_marker)
     if start == -1:
         return ""
+    content_start = start + len(start_marker)
     if end_marker is None:
-        return text[start:].strip()
-    end = text.find(end_marker, start + len(start_marker))
+        return text[content_start:].strip()
+    end = text.find(end_marker, content_start)
     if end == -1:
-        return text[start:].strip()
-    return text[start:end].strip()
+        return text[content_start:].strip()
+    return text[content_start:end].strip()
 
 
 TRANSCRIPT_HEADING_RE = re.compile(
@@ -304,6 +305,109 @@ def extract_models(text):
     return match.group(1).strip() if match else "Unknown models"
 
 
+def extract_chairman(text):
+    match = re.search(r"^\*\*Chairman:\*\*\s*(.+)$", text, re.MULTILINE)
+    return match.group(1).strip() if match else ""
+
+
+def strip_markdown(text):
+    """Collapse the transcript's Markdown-ish text into a plain summary string."""
+    text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    text = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"\1", text)
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    text = re.sub(r"^\s*[-*]\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*\d+[.)]\s+", "", text, flags=re.MULTILINE)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def clip_text(text, max_chars):
+    text = strip_markdown(text)
+    if len(text) <= max_chars:
+        return text
+    clipped = text[:max_chars].rsplit(" ", 1)[0].rstrip(".,;:")
+    return f"{clipped}..."
+
+
+def derive_report_title(question, fallback):
+    """Use the prompt itself for the report title instead of timestamp boilerplate."""
+    generic_headings = {"question", "prompt", "task", "request"}
+    lines = [line.strip() for line in question.splitlines() if line.strip()]
+
+    for line in lines:
+        heading = re.match(r"^#{1,3}\s+(.+)$", line)
+        if heading:
+            heading_text = strip_markdown(heading.group(1))
+            if heading_text.lower() not in generic_headings:
+                return clip_text(heading_text, 96)
+            continue
+        if line.startswith(("**Models:**", "**Chairman:**")):
+            continue
+        return clip_text(line, 96)
+
+    return fallback
+
+
+def extract_bottom_line(markdown_text):
+    """Pull the first useful paragraph after a bottom-line style heading."""
+    lines = markdown_text.strip().splitlines()
+    capture = False
+    paragraphs = []
+    current = []
+
+    def flush_current():
+        nonlocal current
+        if current:
+            paragraphs.append(" ".join(current).strip())
+            current = []
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            flush_current()
+            continue
+
+        normalized = strip_markdown(line).lower().strip(":")
+        if not capture and re.search(r"\bbottom[- ]line\b|\bfinal take\b|\brecommendation\b", normalized):
+            capture = True
+            remainder = re.sub(
+                r"^\s*(?:#{1,6}\s*)?(?:\*\*)?\d*[.)]?\s*(?:bottom[- ]line recommendation|bottom[- ]line|final take|recommendation)(?:\*\*)?\s*:?\s*",
+                "",
+                line,
+                flags=re.IGNORECASE,
+            ).strip()
+            if remainder:
+                current.append(remainder)
+            continue
+
+        if capture:
+            if re.match(r"^#{1,6}\s+", line):
+                break
+            if re.match(r"^\*\*\d+[.)]?\s+", line) and paragraphs:
+                break
+            current.append(line)
+
+    flush_current()
+    useful_paragraphs = [paragraph for paragraph in paragraphs if strip_markdown(paragraph)]
+    for paragraph in useful_paragraphs:
+        if re.search(r"\bbest overall\b|\bdefault\b|\bbuy\b|\bchoose\b|\brecommend", strip_markdown(paragraph), re.IGNORECASE):
+            return clip_text(paragraph, 360)
+
+    if useful_paragraphs:
+        return clip_text(useful_paragraphs[0], 360)
+
+    fallback = []
+    if not fallback:
+        for raw_line in lines:
+            line = raw_line.strip()
+            if line and not re.match(r"^#{1,6}\s+", line):
+                fallback.append(line)
+                break
+
+    return clip_text(" ".join(fallback), 360)
+
+
 def extract_executive_summary(markdown_text):
     headings = list(re.finditer(r"^#{2,4}\s+.*Executive Summary.*$", markdown_text, re.MULTILINE | re.IGNORECASE))
     if not headings:
@@ -317,9 +421,11 @@ def extract_executive_summary(markdown_text):
 
 def build_html_transcript(transcript_markdown):
     """Build an easy-to-read standalone HTML report from a markdown transcript."""
-    title = extract_title(transcript_markdown)
+    transcript_title = extract_title(transcript_markdown)
     models = extract_models(transcript_markdown)
+    chairman = extract_chairman(transcript_markdown)
     question = extract_question(transcript_markdown)
+    title = derive_report_title(question, transcript_title)
     crux = extract_section(transcript_markdown, "Crux Frame")
     analysis = extract_section(transcript_markdown, "Analysis (Structured Disagreement)") or extract_section(transcript_markdown, "Analysis")
     review = extract_section(transcript_markdown, "Review (Anonymized Peer Ranking)")
@@ -339,12 +445,32 @@ def build_html_transcript(transcript_markdown):
         lead = transcript_markdown
         lead_blurb = "The saved answer from this lightweight run."
 
+    lead_preview = extract_bottom_line(lead)
+    hero_summary = lead_preview or clip_text(question, 360)
+    trace_label = "Crux and analysis" if crux and analysis else "Analysis" if analysis else "Run trace"
+    trace_blurb = "Crux frame and structured disagreement are preserved below." if crux and analysis else "Supporting run material is preserved below."
+    archive_blurb = "Full transcript is preserved below."
+    if review:
+        archive_blurb = "Full transcript and peer-review diagnostics are preserved below."
+    run_badges = [models]
+    if chairman:
+        run_badges.append(f"Chairman: {chairman}")
+    if crux:
+        run_badges.append("Crux framing")
+    if review:
+        run_badges.append("Peer review included")
+    else:
+        run_badges.append("Peer review off")
+    badge_html = "\n        ".join(
+        f'<span class="badge">{html.escape(badge)}</span>' for badge in run_badges
+    )
+
     executive_summary = extract_executive_summary(lead)
     lead_without_summary = lead.replace(executive_summary, "").strip() if executive_summary else lead
     executive_summary_html = (
         markdown_to_html(re.sub(r"^#{2,4}\s+.*Executive Summary.*\n?", "", executive_summary).strip(), heading_offset=1)
         if executive_summary else
-        "<p>No executive summary heading was found in the final answer. Start with the main synthesis below.</p>"
+        markdown_to_html(lead_preview, heading_offset=1)
     )
 
     def details(title_text, body, open_by_default=False):
@@ -385,7 +511,7 @@ def build_html_transcript(transcript_markdown):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{html.escape(title)} HTML Report</title>
+<title>{html.escape(title)} - Think Tank HTML Report</title>
 <style>
 :root {{
   --ink: #161a1d;
@@ -500,25 +626,24 @@ section {{ margin-bottom: 28px; }}
     <div>
       <p class="kicker">Think Tank report · {html.escape(created_at)}</p>
       <h1>{html.escape(title)}</h1>
-      <p>This HTML version promotes the final synthesis when available, keeps the executive answer scannable, and preserves the raw council material underneath.</p>
+      <p>{html.escape(hero_summary)}</p>
       <div class="meta">
-        <span class="badge">{html.escape(models)}</span>
-        <span class="badge">{html.escape(lead_label)} on top</span>
+        {badge_html}
       </div>
     </div>
     <aside class="verdict">
       <div>
-        <strong>Artifact pair saved</strong>
-        <p>Markdown keeps the raw transcript portable. HTML makes the answer readable enough to hand to another human without apology.</p>
+        <strong>{html.escape(lead_label)}</strong>
+        <p>{html.escape(lead_preview or lead_blurb)}</p>
       </div>
     </aside>
   </header>
 
   <div class="takeaways" id="fast-read">
-    <article class="takeaway risk"><b>Read first</b><strong>Executive summary</strong><p>The shortest useful version of the final answer.</p></article>
+    <article class="takeaway risk"><b>Read first</b><strong>Bottom line</strong><p>{html.escape(clip_text(lead_preview, 150) or "Start with the lead answer below.")}</p></article>
     <article class="takeaway policy"><b>Then</b><strong>{html.escape(lead_label)}</strong><p>{html.escape(lead_blurb)}</p></article>
-    <article class="takeaway pipeline"><b>Trace</b><strong>Crux and analysis</strong><p>See what mattered, what was unresolved, and where the models agreed.</p></article>
-    <article class="takeaway test"><b>Archive</b><strong>Full transcript</strong><p>All answers, analysis, synthesis, and optional review diagnostics are preserved below.</p></article>
+    <article class="takeaway pipeline"><b>Trace</b><strong>{html.escape(trace_label)}</strong><p>{html.escape(trace_blurb)}</p></article>
+    <article class="takeaway test"><b>Archive</b><strong>Full transcript</strong><p>{html.escape(archive_blurb)}</p></article>
   </div>
 
   <div class="grid">
