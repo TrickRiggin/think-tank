@@ -1,6 +1,6 @@
 # Think Tank
 
-CLI multi-model deliberation tool. Sends one prompt to Claude Opus 4.7, GPT-5.5, Gemini 3.1 Pro, and DeepSeek V4 Pro in parallel through OpenRouter. Optional crux framing, deliberation rounds, anonymized peer review, and Grok 4.20 chairman synthesis. Every run saves a markdown transcript and a polished HTML report by default.
+CLI multi-model deliberation tool. Sends one prompt to Claude Opus 4.7, GPT-5.5, Gemini 3.1 Pro, and DeepSeek V4 Pro in parallel through OpenRouter. Optional crux framing, focused deliberation rounds, structured analysis, and Grok 4.20 chairman synthesis. Every run saves a markdown transcript and a polished HTML report by default.
 
 ## Setup
 
@@ -31,13 +31,14 @@ Run from inside a repo directory to auto-include project context.
 ```
 Stage 0: CRUX        Optional framing pass (--crux)
 Stage 1: COLLECT      Default council answers in parallel
-Stage 2: DELIBERATE   Optional rounds where models challenge each other (--rounds)
+Stage 2: DELIBERATE   Optional focused refinement rounds (--rounds)
 Stage 3: ANALYZE      Chairman extracts consensus, disagreements, unresolved gaps
-Stage 4: REVIEW       Leave-one-out anonymized peer ranking (Response A/B/C/D)
-Stage 5: SYNTHESIZE   Grok 4.20 chairman compiles the final answer
+Optional: REVIEW      Leave-one-out anonymized peer ranking diagnostics (--review)
+Stage 4: SYNTHESIZE   Grok 4.20 chairman compiles the final answer
+Stage 5: SAVE         Markdown transcript + readable HTML report
 ```
 
-Stages 4-5 run by default. Use `--no-chairman` to skip them (analysis still runs if 2+ models responded).
+Synthesis runs by default. Use `--no-chairman` to skip it (analysis still runs if 2+ models responded). Peer review/ranking is off by default; use `--review` only when you explicitly want model-grading diagnostics.
 
 ## Flags
 
@@ -45,7 +46,8 @@ Stages 4-5 run by default. Use `--no-chairman` to skip them (analysis still runs
 |------|-------|-------|-------------|
 | `--chairman` | `-c` | model key | Which model synthesizes the final answer (default: grok) |
 | `--blind` | `-b` | — | Hide model identities until reveal at end |
-| `--no-chairman` | | — | Skip review + synthesis stages; analysis still runs with 2+ responses |
+| `--no-chairman` | | — | Skip chairman synthesis; analysis still runs with 2+ responses |
+| `--review` | | — | Run optional anonymized peer review/ranking diagnostics |
 | `--crux` | | — | Run a framing pass before collection |
 | `--red-team MODEL` | `-R` | model key | Assign one model an adversarial critique role |
 | `--deep` | `-d` | — | Include MEMORY.md from .claude project memory |
@@ -72,7 +74,7 @@ Stages 4-5 run by default. Use `--no-chairman` to skip them (analysis still runs
 ## Examples
 
 ```bash
-# Full pipeline — default 4-model panel, review, Grok chairman synthesis
+# Full pipeline — default 4-model panel, analysis, Grok chairman synthesis
 think_tank "Should we split this into microservices?"
 
 # Include specific source files for a code question
@@ -81,8 +83,11 @@ think_tank -f src/App.jsx,src/utils.js "How should we refactor the tab system?"
 # Crux framing before collection
 think_tank --crux "What's the right caching strategy here?"
 
-# One deliberation round before review + synthesis
+# One focused deliberation round before synthesis
 think_tank -r 1 "What's the right caching strategy here?"
+
+# Optional model-grading diagnostics when you explicitly want them
+think_tank --review "Which answer is strongest?"
 
 # Adversarial critique from one model
 think_tank -R gpt "Where could this migration plan fail?"
@@ -93,7 +98,7 @@ think_tank -b "Which database should we use for this workload?"
 # Use Claude as chairman instead of the default Grok
 think_tank -c claude "Compare these two architectures"
 
-# Skip review + synthesis
+# Skip synthesis
 think_tank --no-chairman "Quick sanity check"
 
 # Deep mode with crux framing and transcript saved
@@ -131,19 +136,21 @@ Direct provider keys are no longer used by `think_tank.py`.
 4. Sends your question + context to all models in parallel.
 5. If `--rounds N` is set, runs N deliberation rounds after the first answer pass.
 6. **Analysis**: Chairman extracts consensus points, disagreements, unresolved gaps, and crux coverage.
-7. **Review**: Anonymizes all responses as Response A/B/C/D; each model reviews only the other responses.
-8. **Synthesis**: Chairman compiles the top-ranked response, dissent, analysis, and rankings into the final answer.
+7. **Optional Review**: With `--review`, anonymizes responses as Response A/B/C/D and runs leave-one-out peer ranking diagnostics.
+8. **Synthesis**: Chairman compiles the final answer from the responses and structured analysis. Optional review rankings are treated only as a weak diagnostic.
 9. Saves a markdown transcript plus a standalone HTML report with the synthesis promoted to the top.
 10. If `--blind`: reveals model identity mapping at the very end.
 
 ## Tips
 
-- **Default**: Four independent perspectives, analysis, review, and synthesis.
+- **Default**: Four independent perspectives, structured analysis, synthesis, and saved artifacts.
 - **`--crux`**: Best first add-on for architecture or strategy decisions.
-- **`--rounds 1`**: One response-to-response pass before review.
-- **`--no-chairman`**: When you want responses plus structured analysis without review/synthesis
+- **`--rounds 1`**: One focused response-to-response refinement pass before synthesis.
+- **`--rounds 2+`**: Usually overkill; use it only for deliberate stress-testing because later rounds tend to become meta-heavy.
+- **`--review`**: Optional model-grading mode. Useful for diagnostics, noisy for decision memos.
+- **`--no-chairman`**: When you want responses plus structured analysis without synthesis.
 - **`--blind`**: Forces you to evaluate responses without model bias before the reveal
 - **`--no-context`**: Skip CLAUDE.md/deep memory; use with `--files` when you want only explicit context
 - **`cd` into the repo first** — context auto-detection needs to find CLAUDE.md
 - Markdown and HTML artifacts save by default under `output/`; use `--save name.md` to choose the basename or `--no-save` for a disposable run.
-- The saved artifacts include everything: responses, reviews, rankings, and synthesis. The HTML report promotes the executive summary/final synthesis first and collapses the source material below.
+- The saved artifacts include everything: responses, analysis, synthesis, and optional review diagnostics. The HTML report promotes the executive summary/final synthesis first and collapses the source material below.

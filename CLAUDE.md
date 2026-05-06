@@ -2,7 +2,7 @@
 
 ## What This Is
 
-CLI multi-model deliberation tool. Sends a prompt to the default 4-model council in parallel through OpenRouter, optional crux framing, deliberation rounds, anonymized peer review, and chairman synthesis. Single-file Python script, no web UI, no MCP wrapper, no framework dependencies beyond `requests`. Runs save markdown and HTML artifacts by default so expensive council calls leave a durable report.
+CLI multi-model deliberation tool. Sends a prompt to the default 4-model council in parallel through OpenRouter, optional crux framing, focused deliberation rounds, structured analysis, and chairman synthesis. Single-file Python script, no web UI, no MCP wrapper, no framework dependencies beyond `requests`. Runs save markdown and HTML artifacts by default so expensive council calls leave a durable report.
 
 ## Architecture
 
@@ -11,14 +11,14 @@ Everything lives in `think_tank.py`. The pipeline:
 ```
 Stage 0: CRUX        — Optional framing pass extracts cruxes/assumptions/tests (--crux)
 Stage 1: COLLECT      — Default council answers in parallel (ThreadPoolExecutor)
-Stage 2: DELIBERATE   — Optional rounds where models challenge each other (--rounds)
+Stage 2: DELIBERATE   — Optional focused refinement rounds (--rounds)
 Stage 3: ANALYZE      — Chairman extracts consensus, disagreements, unresolved gaps, crux coverage
-Stage 4: REVIEW       — Leave-one-out anonymized peer ranking (Response A/B/C/D)
-Stage 5: SYNTHESIZE   — Chairman compiles a final answer from analysis + rankings
-Stage 6: SAVE          — Markdown transcript + standalone HTML report, unless --no-save
+Optional: REVIEW       — Leave-one-out anonymized peer ranking diagnostics (--review)
+Stage 4: SYNTHESIZE   — Chairman compiles a final answer from responses + analysis
+Stage 5: SAVE          — Markdown transcript + standalone HTML report, unless --no-save
 ```
 
-Stages 4-5 skip with `--no-chairman`. Stage 3 (analysis) still runs with `--no-chairman` if 2+ models responded. `--no-context` skips auto project context (`CLAUDE.md` / deep memory) but still loads explicit `--files`.
+Synthesis skips with `--no-chairman`. Stage 3 (analysis) still runs with `--no-chairman` if 2+ models responded. Peer review/ranking is opt-in with `--review`, not part of the normal decision-memo path. `--no-context` skips auto project context (`CLAUDE.md` / deep memory) but still loads explicit `--files`.
 
 ## Models & API Callers
 
@@ -49,17 +49,19 @@ Default council: `claude`, `gpt`, `gemini`, `deepseek`.
 - Skipped if fewer than 2 models responded
 - `run_analysis()` function, uses `ANALYSIS_PROMPT_PROJECT` / `ANALYSIS_PROMPT_GENERAL`
 
-### Anonymized Review (Stage 4)
+### Anonymized Review (Optional --review)
+- Off by default because it makes long runs drift into meta-grading instead of useful decision memos
 - Models evaluate "Response A/B/C/D" — labels are randomly shuffled each run
 - Review is leave-one-out: each reviewer sees only the other models' responses, so self-votes do not contaminate rankings
 - Each model produces a `FINAL RANKING:` section that gets parsed with regex
 - Fallback parsing if models don't follow the exact format
 - Aggregate scores computed as average rank position after discarding any self-rank hallucinations
 
-### Chairman Synthesis (Stage 5)
+### Chairman Synthesis (Stage 4)
 - Default chairman is Grok (`--chairman` flag to change)
-- Chairman sees responses, analysis, and aggregate rankings using blind labels when `--blind` is active
-- Chairman prompt is compiler-style: start from the top-ranked response, preserve useful dissent, and explain material changes
+- Chairman sees responses and structured analysis using blind labels when `--blind` is active
+- If `--review` was run, rankings are provided only as a weak diagnostic signal; the chairman is told not to mention Response labels/rankings unless the user asked for a grading report
+- Chairman prompt is compiler-style: answer the original question directly, preserve useful dissent, and avoid model-debate narration
 - Chairman can be a council member or external. By default Grok is external to the council: it does not answer in Stage 1 unless explicitly included with `--models`.
 
 ### Blind Mode (--blind)
@@ -108,7 +110,7 @@ Default council: `claude`, `gpt`, `gemini`, `deepseek`.
   "total_elapsed": 45.2
 }
 ```
-Fields omitted when stages are skipped (light = no review/synthesis, but analysis still runs).
+Fields omitted when stages are skipped. `review` appears only when `--review` is used.
 
 ## File Structure
 
@@ -131,7 +133,8 @@ Aliases defined in PowerShell profile and `~/.bashrc` so `think_tank` works from
 think_tank "Your question"                    # full pipeline, 4 models
 think_tank --crux "Decision question"         # add crux framing
 think_tank --no-context "General question"    # no auto project context
-think_tank --no-chairman "Quick opinions"     # skip review + synthesis, still runs analysis
+think_tank --no-chairman "Quick opinions"     # skip synthesis, still runs analysis
+think_tank --review "Which response won?"     # optional model-grading diagnostics
 think_tank -r 1 -b -s out.md "Design Q"       # saves output/out.md + output/out.html
 think_tank "Design Q"                         # saves timestamped markdown + HTML under output/
 think_tank --no-save "Disposable check"       # skip artifact writes

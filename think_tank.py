@@ -518,7 +518,7 @@ section {{ margin-bottom: 28px; }}
     <article class="takeaway risk"><b>Read first</b><strong>Executive summary</strong><p>The shortest useful version of the final answer.</p></article>
     <article class="takeaway policy"><b>Then</b><strong>{html.escape(lead_label)}</strong><p>{html.escape(lead_blurb)}</p></article>
     <article class="takeaway pipeline"><b>Trace</b><strong>Crux and analysis</strong><p>See what mattered, what was unresolved, and where the models agreed.</p></article>
-    <article class="takeaway test"><b>Archive</b><strong>Full transcript</strong><p>All answers, reviews, rankings, and reveal data are preserved below.</p></article>
+    <article class="takeaway test"><b>Archive</b><strong>Full transcript</strong><p>All answers, analysis, synthesis, and optional review diagnostics are preserved below.</p></article>
   </div>
 
   <div class="grid">
@@ -804,17 +804,29 @@ DELIBERATION_PROMPT = """Here's what the other models said in the previous round
 
 {other_responses}
 
-Now respond to their points. Where do you agree? Where are they wrong? \
-What did they miss? Build on good ideas, challenge weak ones. Be specific."""
+Now revise your answer in light of their points.
+
+Focus only on:
+- material claims that change the final recommendation,
+- cruxes or assumptions that need correction,
+- missing evidence or validation tests,
+- concrete improvements to the answer.
+
+Do not grade or rank the other models. Do not critique style unless style changes the correctness or usability of the answer. Do not write meta-commentary about the debate. If you agree with a point, integrate it briefly and move on.
+
+End with your refined final answer or recommendation."""
 
 RED_TEAM_DELIBERATION_PROMPT = """Here's what the other models said in the previous round:
 
 {other_responses}
 
-Now push harder on them. Where are they wrong? What are they assuming that might not hold? \
+Now push harder on the substance. Where are they wrong? What are they assuming that might not hold? \
 What failure modes did they gloss over? What would break their plan in production / at scale / \
-with adversarial inputs? Stay specific — real risks, not speculation. If any of their points are \
-genuinely solid, acknowledge it briefly and move on to the next vulnerability. Do not soften your stance."""
+with adversarial inputs? Stay specific — real risks, not speculation.
+
+Do not grade or rank the other models. Do not critique writing style unless it hides a real correctness or operational problem. If any of their points are genuinely solid, acknowledge it briefly and move on to the next vulnerability.
+
+End with the strongest remaining risks and the refined recommendation. Do not soften your stance."""
 
 ANALYSIS_PROMPT_PROJECT = """You are analyzing responses from a {model_count}-model think tank about a software project.
 
@@ -1283,21 +1295,20 @@ Project context:
 Individual responses:
 {responses_text}
 
-Peer rankings:
-{rankings_text}
-
 Structured analysis:
 {analysis_text}
 
+{review_block}
+
 Write the final answer using this discipline:
-- Start from the top-ranked response as the base unless there is a clear reason not to.
-- Preserve the strongest useful points from lower-ranked responses.
+- Start from the original question and answer it directly.
+- Build from the strongest claims across the individual responses; do not describe the model debate unless it affects the answer.
 - Explicitly accept or reject each material dissent from the structured analysis.
-- If you change the top-ranked recommendation, say what changed and why.
 - Address unresolved cruxes, missing evidence, and validation tests.
 - End with concrete, actionable recommendations.
+- If optional peer review was provided, use it only as a weak diagnostic signal. Do not mention response labels, ranking order, or review winners in the final answer unless the user explicitly asked for a grading report.
 
-Be direct. Act like a compiler, not a monarch."""
+Be direct. Produce a useful final artifact, not a tournament recap."""
 
 CHAIRMAN_PROMPT_GENERAL = """You are the compiler of a {model_count}-model think tank. Your job is to \
 turn the council's work into the best possible answer without erasing useful dissent.
@@ -1307,34 +1318,36 @@ Original question: {question}
 Individual responses:
 {responses_text}
 
-Peer rankings:
-{rankings_text}
-
 Structured analysis:
 {analysis_text}
 
+{review_block}
+
 Write the final answer using this discipline:
-- Start from the top-ranked response as the base unless there is a clear reason not to.
-- Preserve the strongest useful points from lower-ranked responses.
+- Start from the original question and answer it directly.
+- Build from the strongest claims across the individual responses; do not describe the model debate unless it affects the answer.
 - Explicitly accept or reject each material dissent from the structured analysis.
-- If you change the top-ranked recommendation, say what changed and why.
 - Address unresolved cruxes, missing evidence, and validation tests.
 - End with concrete, actionable recommendations.
+- If optional peer review was provided, use it only as a weak diagnostic signal. Do not mention response labels, ranking order, or review winners in the final answer unless the user explicitly asked for a grading report.
 
-Be direct. Act like a compiler, not a monarch."""
+Be direct. Produce a useful final artifact, not a tournament recap."""
 
 
-def run_chairman(results, active_models, aggregate, question, context, chairman_key, analysis_text=None, red_team_key=None, blind_map=None, crux_text=None):
+def run_chairman(results, active_models, question, context, chairman_key, analysis_text=None, aggregate=None, red_team_key=None, blind_map=None, crux_text=None):
     """Run chairman synthesis stage. Returns synthesized text or None on failure."""
     responses_text = "\n\n---\n\n".join(
         f"**{get_display_name(key, blind_map)}{' (assigned: red team)' if key == red_team_key else ''}:**\n{results[key]}"
         for key in active_models if results.get(key)
     )
 
-    rankings_text = "\n".join(
-        f"  {rank}. {get_display_name(mk, blind_map)} — avg rank {avg}"
-        for rank, (mk, avg, _) in enumerate(aggregate, 1)
-    )
+    review_block = ""
+    if aggregate:
+        rankings_text = "\n".join(
+            f"  {rank}. {get_display_name(mk, blind_map)} — avg rank {avg}"
+            for rank, (mk, avg, _) in enumerate(aggregate, 1)
+        )
+        review_block = f"Optional peer review rankings were run for diagnostic purposes:\n{rankings_text}"
 
     model_count = len([k for k in active_models if results.get(k)])
 
@@ -1342,14 +1355,15 @@ def run_chairman(results, active_models, aggregate, question, context, chairman_
         prompt_text = CHAIRMAN_PROMPT_PROJECT.format(
             model_count=model_count, question=question,
             context=context, responses_text=responses_text,
-            rankings_text=rankings_text,
             analysis_text=analysis_text or "Analysis not available.",
+            review_block=review_block,
         )
     else:
         prompt_text = CHAIRMAN_PROMPT_GENERAL.format(
             model_count=model_count, question=question,
-            responses_text=responses_text, rankings_text=rankings_text,
+            responses_text=responses_text,
             analysis_text=analysis_text or "Analysis not available.",
+            review_block=review_block,
         )
 
     if crux_text:
@@ -1371,7 +1385,7 @@ def run_chairman(results, active_models, aggregate, question, context, chairman_
         )
 
     chairman_messages = [
-        {"role": "system", "content": "You compile a multi-model council into one useful answer. Preserve strong dissent, explain material changes, and do not overrule the council by taste alone."},
+        {"role": "system", "content": "You compile a multi-model council into one useful final answer. Preserve strong dissent and unresolved evidence, but avoid meta-commentary, rankings, or model-debate narration unless the user asked for it."},
         {"role": "user", "content": prompt_text},
     ]
 
@@ -1435,7 +1449,9 @@ def main():
     parser.add_argument("--blind", "-b", action="store_true",
                         help="Hide model identities until reveal at end")
     parser.add_argument("--no-chairman", action="store_true",
-                        help="Skip review + synthesis stages")
+                        help="Skip chairman synthesis; analysis still runs with 2+ responses")
+    parser.add_argument("--review", action="store_true",
+                        help="Run optional anonymized peer review/ranking diagnostics (off by default)")
     parser.add_argument("--crux", action="store_true",
                         help="Run a framing pass before collection to extract cruxes, hidden assumptions, and validation tests")
     parser.add_argument("--red-team", "-R", default=None, metavar="MODEL",
@@ -1456,6 +1472,10 @@ def main():
     global JSON_MODE
     if args.json:
         JSON_MODE = True
+
+    if args.rounds > 1:
+        _print(f"  {C['err']}Warning: more than 1 deliberation round often becomes meta-heavy. "
+               f"Prefer 0-1 unless you are intentionally stress-testing the question.{C['reset']}")
 
     # Get question
     question = args.question
@@ -1532,6 +1552,8 @@ def main():
         _print(f"  {C['bold']}Mode:{C['reset']} Crux framing")
     if not args.no_chairman:
         _print(f"  {C['bold']}Chairman:{C['reset']} {get_display_name(args.chairman, blind_map)}")
+    if args.review:
+        _print(f"  {C['bold']}Mode:{C['reset']} Optional peer review diagnostics")
     if red_team_key:
         _print(f"  {C['bold']}Red team:{C['reset']} {get_display_name(red_team_key, blind_map)} (adversarial role)")
     if args.blind:
@@ -1694,10 +1716,11 @@ def main():
     else:
         _print(f"\n{C['system']}  Skipping analysis — fewer than 2 models responded.{C['reset']}")
 
-    # ── Review + Synthesis (unless --no-chairman) ────────────────────────
+    # ── Optional review + synthesis ──────────────────────────────────────
     chairman_text = None
     label_to_model = {}
-    if not args.no_chairman and len(responding) >= 2:
+    aggregate = None
+    if args.review and len(responding) >= 2:
         all_rankings, label_to_model, aggregate, review_texts = run_review(
             final_responses, active_models, question, context, blind_map, red_team_key,
         )
@@ -1722,22 +1745,23 @@ def main():
             name = get_display_name(mk, blind_map)
             transcript.append(f"{rank}. {name} — avg rank {avg} ({votes} votes)\n")
 
+    if not args.no_chairman and len(responding) >= 2:
         # Chairman synthesis
         chairman_text = run_chairman(
-            final_responses, active_models, aggregate,
-            question, context, args.chairman, analysis_text, red_team_key, blind_map, crux_text,
+            final_responses, active_models,
+            question, context, args.chairman, analysis_text, aggregate, red_team_key, blind_map, crux_text,
         )
 
         if chairman_text:
             json_synthesis = chairman_text
             transcript.append(f"\n## Chairman Synthesis\n{chairman_text}\n")
         else:
-            transcript.append("\n## Chairman Synthesis\n*Chairman failed — see aggregate rankings above.*\n")
+            transcript.append("\n## Chairman Synthesis\n*Chairman failed — see analysis and model responses above.*\n")
 
     # ── Blind reveal ────────────────────────────────────────────────────
     if args.blind:
         _print(f"\n{C['bold']}  ── Reveal ──────────{C['reset']}")
-        if not args.no_chairman and label_to_model:
+        if label_to_model:
             for label, model_key in label_to_model.items():
                 _print(f"  {label} → {MODELS[model_key]['name']}")
             _print()
@@ -1745,7 +1769,7 @@ def main():
             _print(f"  {panelist_name} → {MODELS[key]['name']}")
 
         transcript.append("\n## Reveal\n")
-        if not args.no_chairman and label_to_model:
+        if label_to_model:
             for label, model_key in label_to_model.items():
                 transcript.append(f"- {label} → {MODELS[model_key]['name']}\n")
         for key, panelist_name in blind_map.items():
@@ -1778,7 +1802,7 @@ def main():
             json_output["red_team"] = red_team_key
         if json_analysis:
             json_output["analysis"] = json_analysis
-        if not args.no_chairman and json_review:
+        if json_review:
             json_output["review"] = json_review
         if not args.no_chairman and json_synthesis:
             json_output["synthesis"] = json_synthesis
